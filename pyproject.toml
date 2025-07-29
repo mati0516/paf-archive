@@ -1,0 +1,15 @@
+[project]
+name = "paf-archive"
+version = "0.1.0"
+description = "Fast uncompressed archive format"
+authors = [{ name = "mati", email = "mati.0516@email.com" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = []
+
+[project.scripts]
+paf-create = "paf.cli:create"
+paf-extract = "paf.cli:extract"
+paf-ls = "paf.cli:ls"
+paf-to-iso = "paf.cli:to_iso"

@@ -1,0 +1,20 @@
+# Ensure consistent line endings
+* text=auto
+
+# Treat script files as text
+*.py text
+*.sh text
+*.c text
+*.h text
+*.md text
+*.txt text
+makefile text
+
+# Prevent accidental Git diff on binaries
+*.zip binary
+*.tar binary
+*.paf binary
+
+# Ignore test artifacts
+test/output/* linguist-vendored
+examples/testdir/* linguist-vendored
