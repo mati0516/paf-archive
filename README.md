@@ -1,142 +1,147 @@
 # 📦 Parallel Archive Format (PAF)
 
-A simple, fast, and transparent archiving format designed for maximum I/O performance and ease of use.
+A high-speed, non-compressed archive format optimized for ease of use, transparency, and cross-platform support.
 
-Supports both C and Python implementations.  
-Compression-free, instantly mountable, and CLI-friendly.
-
-## 🚀 Features
+## 🚀 Key Features
 
 - ✅ No compression (raw file copy)
-- ✅ Fast and parallel-safe creation
-- ✅ Instant listing and extraction
-- ✅ Full folder hierarchy support
-- ✅ UTF-8 filename support (including Japanese)
-- ✅ CRC32 verification per file
-- ✅ `.pafignore` support (like `.gitignore`) ← WIP
-- ✅ C library + Python CLI interface
-- ✅ Cross-platform (Windows / Linux / macOS)
+- ✅ Ultra-fast archive creation and extraction
+- ✅ UTF-8 filename support (including Japanese/multibyte)
+- ✅ Full folder hierarchy and recursive directory support
+- ✅ `.pafignore` auto-detection and explicit specification
+- ✅ `--ignore-from` support (uses `.gitignore`-style wildcards via `fnmatch()`)
+- ✅ CRC32 checksum per file
+- ✅ Path traversal protection (safe extraction)
+- ✅ Overwrite protection (root overwrite disabled by default)
+- ✅ C library (shared: `.so`, `.dll`, `.dylib`)
+- ✅ Python CLI / WASM / GUI planned
+- ✅ Fully cross-platform (Windows / Linux / macOS)
 - ✅ MIT Licensed
 
 ## 📦 Usage (Python CLI)
 
-Install locally:
+Install:
 
 ```bash
 pip install -e .
 ```
 
-Then use:
+Then run:
 
 ```bash
 paf create archive.paf myfolder/
 paf ls archive.paf
-paf extract archive.paf output_folder/
-paf to-iso archive.paf iso_extract_dir/
+paf extract archive.paf out/
+paf extract archive.paf out/ --overwrite
 ```
+
+⚠️ Note: Only the C library has been fully tested as of now. Python CLI is under redevelopment and temporarily excluded from this version.
 
 ## ⚙️ Usage (C Library)
 
 ```c
 #include "libpaf.h"
 
-const char* files[] = {"file1.txt", "dir2"};
-paf_create("out.paf", files, 2);
-
-paf_extract_all("out.paf", "output/");
+const char* paths[] = {"file1.txt", "dir2"};
+paf_create_binary("out.paf", paths, 2, ".pafignore", 1); // last arg: recursive-ignore
 ```
 
-To verify individual file:
+Extract all:
 
 ```c
-int ok = paf_verify_file("out.paf", "dir2/hello.txt"); // returns 0 if valid
+paf_extract_binary("out.paf", "out/", 0); // overwrite = 0
 ```
 
-You can also extract to a directory structure:
+Extract single file or folder:
 
 ```c
-paf_extract_to_dir("out.paf", "iso_extract/");
+paf_extract_file("out.paf", "dir2/note.txt", "out_single/");
+paf_extract_folder("out.paf", "dir2/", "out_dir/");
 ```
 
-## 🛠 Tools
+List entries:
 
-- `libpaf/` – C implementation of the PAF format
-- `tools/python/paf/` – Python CLI & module (`paf create`, `extract`, `ls`, etc.)
-- `setup.py` – pip install support
-- `.pafignore` – optional ignore file for archive filtering
+```c
+PafList list;
+if (paf_list_binary("out.paf", &list) == 0) {
+    for (uint32_t i = 0; i < list.count; ++i) {
+        printf("%s (%u bytes)\n", list.entries[i].path, list.entries[i].size);
+    }
+    free_paf_list(&list);
+}
+```
 
-## 📄 Format Structure
+## 🧪 Test All Features
 
-- 32-byte header
-- Concatenated file data
-- File index (file count, names, sizes, offsets)
+Run from `paf-archive/test/`:
 
-## 📜 License
+```cmd
+test.cmd
+```
 
-MIT License
-
----
-
-## 📑 Format Specification (PAF v1)
-
-### Overview
-
-The PAF (Parallel Archive Format) is a simple binary format designed for high-speed archiving without compression.  
-It consists of three main parts: **Header**, **File Data Block**, and **File Index Block**.
-
----
-
-### Format Layout
+## 📁 Project Structure
 
 ```
-+----------------------+  Offset 0
+paf-archive/
+├── libpaf/             # Core C library
+│   ├── libpaf_core.c
+│   ├── libpaf_list.c
+│   ├── libpaf_extract.c
+│   ├── libpaf_exists.c
+│   ├── libpaf_extra.c
+│   └── libpaf.h
+├── test/               # C-based functional tests
+│   ├── test_all.c
+│   ├── test.cmd
+│   └── ...
+├── dist/               # Built shared libraries
+│   ├── windows/libpaf.dll
+│   ├── linux/libpaf.so
+│   └── macos/libpaf.dylib
+├── bindings/           # Multi-language bindings
+│   ├── python/
+│   ├── go/
+│   ├── rust/
+│   ├── csharp/
+│   └── node/
+├── wasm/               # Planned browser viewer (WASM/JS)
+│   ├── index.html
+│   └── paf.js / paf.wasm
+```
+
+## 📄 Format Layout (PAF v1)
+
+```
++----------------------+
 | Header (32 bytes)    |
 +----------------------+
 | File Data Block      |
-| (concatenated files) |
 +----------------------+
 | File Index Block     |
 +----------------------+
 ```
 
----
+### Header (32 bytes)
 
-### 🧱 Header (32 bytes)
+| Offset | Type    | Description                  |
+|--------|---------|------------------------------|
+| 0–3    | char[4] | Magic: `'PAF1'`              |
+| 4–7    | uint32  | File count                   |
+| 8–11   | uint32  | Offset to index block        |
+| 12–31  | char[20]| Reserved (zero-filled)       |
 
-| Bytes | Type     | Description |
-|-------|----------|-------------|
-| 0–3   | char[4]  | Magic number: `b'PAF'` |
-| 4–7   | uint32   | File count |
-| 8–11  | uint32   | Offset to index block (from start of file) |
-| 12–31 | reserved | Reserved for future use (20 bytes, zero-filled) |
+### File Index Block
 
----
+Each entry contains:
 
-### 📦 File Data Block
-
-- Raw binary data of each file, concatenated in order.
-- No compression, encryption, or padding.
-- Offset and size of each file is tracked in the index block.
-
----
-
-### 📋 File Index Block
-
-Each file entry in the index block is encoded as:
-
-| Bytes              | Type                  | Description            |
-|--------------------|-----------------------|------------------------|
-| 0–1                | uint16                | Filename length (in bytes) |
-| 2–(2+N-1)          | utf-8 encoded string  | Filename (N bytes, not null-terminated) |
-| (2+N)–(5+N)        | uint32                | File size (in bytes)   |
-| (6+N)–(9+N)        | uint32                | Offset (from start of data block) |
-
-> ✅ Filenames use UTF-8 and may contain slashes (`/`) for directory structure.
+- Filename length (2 bytes)
+- UTF-8 path (N bytes)
+- File size (4 bytes)
+- Offset (4 bytes)
+- CRC32 (4 bytes)
 
 ---
 
-### 📘 Notes
+## 📜 License
 
-- Directory structure is preserved via `/` in filenames (not as actual folders).
-- File offsets in the index block are relative to the start of the data block (not the whole file).
-- Reserved bytes in the header (bytes 12–31) may be used in future versions.
+MIT License
