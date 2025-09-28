@@ -8,37 +8,41 @@
 extern "C" {
 #endif
 
+// Entry structure representing a file inside a .paf archive
 typedef struct {
-    char* path;         // UTF-8パス
-    uint32_t size;      // ファイルサイズ
-    uint32_t offset;    // データブロック内のオフセット
-    uint32_t crc32;     // CRC32（追加）
+    char path[1024];       // UTF-8 file path (null-terminated)
+    uint32_t size;         // File size in bytes
+    uint32_t offset;       // Offset to the file data inside .paf
+    uint32_t crc32;        // CRC32 checksum of the file
 } PafEntry;
 
-
+// List of entries in a .paf archive
 typedef struct {
-    PafEntry* entries; // ファイル一覧
-    uint32_t count;    // ファイル数
+    PafEntry* entries;     // Array of file entries
+    uint32_t count;        // Number of files
 } PafList;
 
-//// API ////
+// Create a .paf archive from specified files or folders
+int paf_create_binary(const char* out_paf_path, const char** input_paths, int path_count, const char* ignore_file_path, int recursive_ignore);
 
-// アーカイブを作成（paths: UTF-8のファイル/フォルダパスの配列）
-int paf_create(const char* out_paf_path, const char** paths, int path_count);
+// Extract all contents of a .paf archive into a directory
+int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite);
 
-// 一覧を取得（呼び出し元で free_paf_list() 必須）
-int paf_list(const char* paf_path, PafList* out_list);
-
-// 単一ファイルを抽出（ファイル名はリストで取得できる）
-int paf_extract_file(const char* paf_path, const char* file_name, const char* out_path);
-
-// 全ファイルを抽出（出力フォルダに展開）
-int paf_extract_all(const char* paf_path, const char* output_dir);
-
-int paf_extract_to_dir(const char* paf_path, const char* output_dir);
-
-// 後始末
+// Retrieve the list of files in the archive
+int paf_list_binary(const char* paf_path, PafList* out_list);
 void free_paf_list(PafList* list);
+
+// Extract a single file from the archive
+int paf_extract_file(const char* paf_path, const char* internal_path, const char* output_path);
+
+// Extract all files under a specified folder (prefix match)
+int paf_extract_folder(const char* paf_path, const char* internal_dir, const char* output_dir);
+
+// Check if a file exists in the archive
+int file_exists_in_archive(const char* paf_path, const char* internal_path);
+
+// Check if a folder (prefix) exists in the archive
+int folder_exists_in_archive(const char* paf_path, const char* internal_dir);
 
 #ifdef __cplusplus
 }

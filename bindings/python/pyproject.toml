@@ -1,7 +1,7 @@
 [project]
-name = "paf-archive"
-version = "0.1.0"
-description = "Fast uncompressed archive format"
+name = "paf"
+version = "0.2.0"
+description = "Fast uncompressed archive format with native C backend"
 authors = [{ name = "mati", email = "mati.0516@email.com" }]
 license = "MIT"
 readme = "README.md"
@@ -13,3 +13,9 @@ paf-create = "paf.cli:create"
 paf-extract = "paf.cli:extract"
 paf-ls = "paf.cli:ls"
 paf-to-iso = "paf.cli:to_iso"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"paf" = ["*.dll", "*.so", "*.dylib"]
