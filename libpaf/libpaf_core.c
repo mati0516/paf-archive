@@ -94,7 +94,7 @@ static int collect_files_binary(const char* base_dir, const char* rel_path,
 
     struct dirent* entry;
     IgnoreRuleList local_rules = {0};
-    char ignore_path[1024];
+    char ignore_path[2048];
     snprintf(ignore_path, sizeof(ignore_path), "%s/.pafignore", path);
     if (recursive_ignore && access(ignore_path, F_OK) == 0) {
         load_ignore_file(ignore_path, &local_rules);
@@ -129,7 +129,7 @@ static int collect_files_binary(const char* base_dir, const char* rel_path,
             uint32_t size = (uint32_t)ftell(fp);
             fseek(fp, 0, SEEK_SET);
             unsigned char* buf = malloc(size);
-            fread(buf, 1, size, fp);
+            (void)fread(buf, 1, size, fp);
             fclose(fp);
             uint32_t crc = crc32(buf, size);
             free(buf);
@@ -193,7 +193,7 @@ int paf_create_binary(const char* out_paf_path, const char** input_paths, int pa
         FILE* fp = fopen(fullpath, "rb");
         if (!fp) continue;
         char* buf = malloc(entries[i].size);
-        fread(buf, 1, entries[i].size, fp);
+        (void)fread(buf, 1, entries[i].size, fp);
         fclose(fp);
         fwrite(buf, 1, entries[i].size, out);
         free(buf);
@@ -210,13 +210,13 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
     if (!fp) return -1;
 
     char magic[4];
-    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    if ((void)fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
         fclose(fp);
         return -2;
     }
 
     uint32_t file_count;
-    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
+    if ((void)fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
         fclose(fp);
         return -3;
     }
@@ -224,13 +224,13 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
     for (uint32_t i = 0; i < file_count; ++i) {
         uint16_t len;
         char path[1024];
-        fread(&len, sizeof(uint16_t), 1, fp);
-        fread(path, 1, len, fp);
+        (void)fread(&len, sizeof(uint16_t), 1, fp);
+        (void)fread(path, 1, len, fp);
         path[len] = '\0';
         uint32_t size, offset, crc;
-        fread(&size, sizeof(uint32_t), 1, fp);
-        fread(&offset, sizeof(uint32_t), 1, fp);
-        fread(&crc, sizeof(uint32_t), 1, fp);
+        (void)fread(&size, sizeof(uint32_t), 1, fp);
+        (void)fread(&offset, sizeof(uint32_t), 1, fp);
+        (void)fread(&crc, sizeof(uint32_t), 1, fp);
 
         char fullpath[1024];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path);
@@ -245,7 +245,7 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
         fseek(fp, 4 + sizeof(uint32_t), SEEK_SET);
         for (uint32_t j = 0; j < file_count; ++j) {
             uint16_t skip_len;
-            fread(&skip_len, sizeof(uint16_t), 1, fp);
+            (void)fread(&skip_len, sizeof(uint16_t), 1, fp);
             fseek(fp, skip_len + sizeof(uint32_t)*3 + sizeof(uint32_t), SEEK_CUR);
         }
 
@@ -255,7 +255,7 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
         if (!out_fp) continue;
 
         char* buffer = malloc(size);
-        fread(buffer, 1, size, fp);
+        (void)fread(buffer, 1, size, fp);
         fwrite(buffer, 1, size, out_fp);
         free(buffer);
         fclose(out_fp);
