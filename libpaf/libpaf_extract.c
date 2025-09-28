@@ -44,9 +44,9 @@ int paf_extract_file(const char* paf_path, const char* internal_path, const char
         path[len] = '\0';
 
         uint32_t size, offset, crc;
-        fread(&size, sizeof(uint32_t), 1, fp);
-        fread(&offset, sizeof(uint32_t), 1, fp);
-        fread(&crc, sizeof(uint32_t), 1, fp);
+        (void)fread(&size, sizeof(uint32_t), 1, fp);
+        (void)fread(&offset, sizeof(uint32_t), 1, fp);
+        (void)fread(&crc, sizeof(uint32_t), 1, fp);
 
         if (strcmp(path, internal_path) == 0) {
             fseek(fp, 32 + offset, SEEK_SET);
@@ -63,7 +63,7 @@ int paf_extract_file(const char* paf_path, const char* internal_path, const char
                 return -5;
             }
 
-            fread(buffer, 1, size, fp);
+            (void)fread(buffer, 1, size, fp);
             fwrite(buffer, 1, size, out);
             free(buffer);
             fclose(out);
@@ -91,13 +91,13 @@ int paf_extract_folder(const char* paf_path, const char* internal_dir, const cha
     if (!fp) return -1;
 
     char magic[4];
-    if ((void)fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
         fclose(fp);
         return -2;
     }
 
     uint32_t file_count;
-    if ((void)fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
+    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
         fclose(fp);
         return -3;
     }
@@ -105,9 +105,9 @@ int paf_extract_folder(const char* paf_path, const char* internal_dir, const cha
     for (uint32_t i = 0; i < file_count; ++i) {
         char path[1024] = {0};
         uint16_t len;
-        if ((void)fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
+        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
         if (len >= sizeof(path)) break;
-        if ((void)fread(path, 1, len, fp) != len) break;
+        if (fread(path, 1, len, fp) != len) break;
         path[len] = '\0';
 
         uint32_t size, offset, crc;

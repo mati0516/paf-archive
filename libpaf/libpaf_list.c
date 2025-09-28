@@ -10,13 +10,13 @@ int paf_list_binary(const char* paf_path, PafList* out_list) {
     if (!fp) return -1;
 
     char magic[4];
-    if ((void)fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
         fclose(fp);
         return -2;
     }
 
     uint32_t file_count;
-    if ((void)fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
+    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
         fclose(fp);
         return -3;
     }
@@ -26,8 +26,8 @@ int paf_list_binary(const char* paf_path, PafList* out_list) {
 
     for (uint32_t i = 0; i < file_count; ++i) {
         uint16_t len;
-        if ((void)fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
-        if ((void)fread(out_list->entries[i].path, 1, len, fp) != len) break;
+        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
+        if (fread(out_list->entries[i].path, 1, len, fp) != len) break;
         out_list->entries[i].path[len] = '\0';
 
         (void)fread(&out_list->entries[i].size, sizeof(uint32_t), 1, fp);
