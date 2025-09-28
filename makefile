@@ -1,18 +1,19 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -Wno-format-truncation -I.\libpaf
+CFLAGS = -O2 -Wall -Wextra
+INCLUDES = -Ilibpaf
 
-SRC = \
-    libpaf/libpaf_core.c \
-    libpaf/libpaf_list.c \
-    libpaf/libpaf_extract.c \
-    libpaf/libpaf_exists.c \
-    libpaf/fnmatch.c
+LIBSRC := $(wildcard libpaf/*.c)
 
-TARGET = test/test_all
+all: libpaf.so libpaf.dylib libpaf.dll
 
-$(TARGET): $(SRC) test/test_all.c
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) test/test_all.c
+libpaf.so: $(LIBSRC)
+	$(CC) -shared -fPIC $(CFLAGS) $(INCLUDES) -o libpaf/libpaf.so $^
 
-.PHONY: clean
+libpaf.dylib: $(LIBSRC)
+	$(CC) -dynamiclib $(CFLAGS) $(INCLUDES) -o libpaf/libpaf.dylib $^
+
+libpaf.dll: $(LIBSRC)
+	$(CC) -shared $(CFLAGS) $(INCLUDES) -o libpaf/libpaf.dll $^
+
 clean:
-	rm -f $(TARGET)
+	rm -f libpaf/*.so libpaf/*.dylib libpaf/*.dll
