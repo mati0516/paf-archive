@@ -210,13 +210,13 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
     if (!fp) return -1;
 
     char magic[4];
-    if ((void)fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
         fclose(fp);
         return -2;
     }
 
     uint32_t file_count;
-    if ((void)fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
+    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
         fclose(fp);
         return -3;
     }
