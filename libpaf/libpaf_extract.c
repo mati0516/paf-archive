@@ -5,10 +5,14 @@
 #include <string.h>
 
 #ifdef _WIN32
-#include <direct.h>  // for mkdir on Windows
+#include <direct.h>
+#define MKDIR(path) _mkdir(path)
 #else
-#include <sys/stat.h>  // for mkdir on POSIX
+#include <sys/stat.h>
+#define MKDIR(path) mkdir(path, 0755)
 #endif
+
+
 
 // Extracts a single file from a .paf archive
 int paf_extract_file(const char* paf_path, const char* internal_path, const char* output_path) {
@@ -87,13 +91,13 @@ int paf_extract_folder(const char* paf_path, const char* internal_dir, const cha
     if (!fp) return -1;
 
     char magic[4];
-    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    if ((void)fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
         fclose(fp);
         return -2;
     }
 
     uint32_t file_count;
-    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
+    if ((void)fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
         fclose(fp);
         return -3;
     }
@@ -101,15 +105,15 @@ int paf_extract_folder(const char* paf_path, const char* internal_dir, const cha
     for (uint32_t i = 0; i < file_count; ++i) {
         char path[1024] = {0};
         uint16_t len;
-        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
+        if ((void)fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
         if (len >= sizeof(path)) break;
-        if (fread(path, 1, len, fp) != len) break;
+        if ((void)fread(path, 1, len, fp) != len) break;
         path[len] = '\0';
 
         uint32_t size, offset, crc;
-        fread(&size, sizeof(uint32_t), 1, fp);
-        fread(&offset, sizeof(uint32_t), 1, fp);
-        fread(&crc, sizeof(uint32_t), 1, fp);
+        (void)fread(&size, sizeof(uint32_t), 1, fp);
+        (void)fread(&offset, sizeof(uint32_t), 1, fp);
+        (void)fread(&crc, sizeof(uint32_t), 1, fp);
 
         if (!path_starts_with(path, internal_dir)) continue;
 
@@ -122,7 +126,7 @@ int paf_extract_folder(const char* paf_path, const char* internal_dir, const cha
         for (char* p = fullpath + strlen(output_dir) + 1; *p; ++p) {
             if (*p == '/' || *p == '\\') {
                 *p = '\0';
-                mkdir(fullpath);
+                MKDIR(fullpath);
                 *p = '/';
             }
         }
@@ -136,7 +140,7 @@ int paf_extract_folder(const char* paf_path, const char* internal_dir, const cha
             continue;
         }
 
-        fread(buffer, 1, size, fp);
+        (void)fread(buffer, 1, size, fp);
         fwrite(buffer, 1, size, out);
         free(buffer);
         fclose(out);
