@@ -14,8 +14,9 @@ A high-speed, non-compressed archive format optimized for ease of use, transpare
 - ✅ Path traversal protection (safe extraction)
 - ✅ Overwrite protection (root overwrite disabled by default)
 - ✅ C library (shared: `.so`, `.dll`, `.dylib`)
-- ✅ Python CLI / WASM / GUI planned
+- ✅ WebAssembly (WASM) Viewer & Creator with 12-language support
 - ✅ Fully cross-platform (Windows / Linux / macOS)
+- ✅ OS Mountable non-compressed .zip output in browser
 - ✅ MIT Licensed
 
 ## 📦 Usage (Python CLI)
@@ -36,6 +37,22 @@ paf extract archive.paf out/ --overwrite
 ```
 
 ⚠️ Note: Only the C library has been fully tested as of now. Python CLI is under redevelopment and temporarily excluded from this version.
+
+## 🌐 WebAssembly (Browser UI)
+
+A fully functional browser-based UI is available in the `wasm/` directory.
+
+### Features
+- **Viewer**: Drag and drop a `.paf` file to view its contents and extract files to a virtual filesystem.
+- **Package**: Drag and drop multiple files to instantly create a new `.paf` archive or a non-compressed `.zip` file (OS mountable).
+- **Multi-language**: Supports 12 languages automatically (English, Japanese, Chinese, Spanish, Hindi, Arabic, French, Russian, Portuguese, German, Korean, Italian).
+
+### Usage
+1. Start a local server in the project root:
+   ```bash
+   python -m http.server 8080
+   ```
+2. Open `http://localhost:8080/wasm/index.html` in your browser.
 
 ## ⚙️ Usage (C Library)
 

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="title">📦 PAF Web Tool</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; }
+        .lang-picker { margin-top: 10px; }
+        .lang-picker select { padding: 5px; border-radius: 4px; background: #1e293b; color: #f8fafc; border: 1px solid #334155; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-top">
+            <header>
+                <h1 data-i18n="title">📦 PAF Web Tool</h1>
+                <p data-i18n="subtitle">High-speed parallel archive format</p>
+            </header>
+            <div class="lang-picker">
+                <select id="lang-select">
+                    <option value="en">English</option>
+                    <option value="ja">日本語</option>
+                    <option value="zh">简体中文</option>
+                    <option value="es">Español</option>
+                    <option value="hi">हिन्दी</option>
+                    <option value="ar">العربية</option>
+                    <option value="fr">Français</option>
+                    <option value="ru">Русский</option>
+                    <option value="pt">Português</option>
+                    <option value="de">Deutsch</option>
+                    <option value="ko">한국어</option>
+                    <option value="it">Italiano</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-target="tab-extract" data-i18n="tab_viewer">閲覧 (Viewer)</button>
+            <button class="tab-btn" data-target="tab-compress" data-i18n="tab_package">まとめる (Package)</button>
+        </div>
+
+        <!-- 解凍 (Extract) タブ -->
+        <div id="tab-extract" class="tab-content active">
+            <div id="extract-drop-zone" class="drop-zone">
+                <span class="icon">📂</span>
+                <p data-i18n="drop_view">ここに .paf ファイルをドロップして閲覧</p>
+                <input type="file" id="extract-file-input" accept=".paf" hidden>
+            </div>
+
+            <div id="extract-loading" class="hidden">
+                <p data-i18n="processing">Processing archive...</p>
+            </div>
+
+            <div id="extract-results" class="hidden">
+                <h2 data-i18n="archive_contents">Archive Contents</h2>
+                <div class="table-container">
+                    <table id="file-table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="th_path">File Path</th>
+                                <th data-i18n="th_size">Size (Bytes)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="file-list">
+                        </tbody>
+                    </table>
+                </div>
+                <button id="extract-btn" class="btn primary" data-i18n="extract_btn">Extract All to Virtual FS</button>
+                <div id="extract-status"></div>
+            </div>
+        </div>
+
+        <!-- 圧縮 (Create) タブ -->
+        <div id="tab-compress" class="tab-content hidden">
+            <div id="compress-drop-zone" class="drop-zone">
+                <span class="icon">➕</span>
+                <p data-i18n="drop_create">ここに複数のファイルをドロップしてまとめる (パッケージ化)</p>
+                <input type="file" id="compress-file-input" multiple hidden>
+            </div>
+
+            <div id="compress-loading" class="hidden">
+                <p data-i18n="creating">Creating archive...</p>
+            </div>
+
+            <div id="compress-results" class="hidden">
+                <h2><span data-i18n="selected_files">Selected Files</span> (<span id="compress-file-count">0</span>)</h2>
+                <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                    <button id="compress-paf-btn" class="btn primary" data-i18n="btn_create_paf">Create .paf</button>
+                    <button id="compress-zip-btn" class="btn" style="background-color: #10b981; color: white;" data-i18n="btn_create_zip">Create .zip (OS Mountable)</button>
+                </div>
+                <a id="download-link" hidden></a>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="paf.js"></script>
+    <script src="i18n.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
