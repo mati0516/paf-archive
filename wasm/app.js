@@ -179,7 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const cmpResults = document.getElementById('compress-results');
     const cmpLoading = document.getElementById('compress-loading');
     const cmpPafBtn = document.getElementById('compress-paf-btn');
-    const cmpZipBtn = document.getElementById('compress-zip-btn');
+
     const cmpCount = document.getElementById('compress-file-count');
     const dlLink = document.getElementById('download-link');
 
@@ -204,8 +204,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (filesToCompress.length === 0) return;
         cmpLoading.classList.remove('hidden');
         
-        if (typeof Module === 'undefined' || !Module.FS) {
-            alert(t("alert_wasm_err"));
+        if (typeof Module === 'undefined' || !Module.FS || typeof Module._wasm_paf_create !== 'function') {
+            alert(t("alert_wasm_err") + ' (WASM not built with paf_create. Please rebuild.)');
             cmpLoading.classList.add('hidden');
             return;
         }
@@ -246,41 +246,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // .zip 作成処理 (OS標準マウント用, 非圧縮STOREモード)
-    cmpZipBtn.addEventListener('click', async () => {
-        if (filesToCompress.length === 0) return;
-        if (typeof JSZip === 'undefined') {
-            alert("JSZip library not loaded.");
-            return;
-        }
-        
-        cmpLoading.classList.remove('hidden');
-        
-        try {
-            const zip = new JSZip();
-            
-            for (let i = 0; i < filesToCompress.length; i++) {
-                const file = filesToCompress[i];
-                const arrayBuffer = await file.arrayBuffer();
-                // JSZipにファイルを追加
-                zip.file(file.name, arrayBuffer);
-            }
-
-            // 非圧縮 (STORE) モードで生成し、超高速化＆PAFの思想に合わせる
-            const content = await zip.generateAsync({
-                type: "uint8array",
-                compression: "STORE" 
-            });
-            
-            triggerDownload(content, "archive.zip", "application/zip");
-            
-        } catch (e) {
-            console.error(e);
-            alert(t("alert_zip_err"));
-        } finally {
-            cmpLoading.classList.add('hidden');
-        }
-    });
 
     function triggerDownload(dataArray, filename, mimeType) {
         const blob = new Blob([dataArray], { type: mimeType });
