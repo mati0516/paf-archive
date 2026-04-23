@@ -40,7 +40,9 @@ paf extract archive.paf out/ --overwrite
 
 ## 🌐 WebAssembly (Browser UI)
 
-A fully functional browser-based UI is available in the `wasm/` directory.
+A fully functional browser-based UI is available for anyone to use immediately.
+
+> **🚀 Try it online: [https://mati0516.github.io/paf-archive/](https://mati0516.github.io/paf-archive/)**
 
 ### Features
 - **Viewer**: Drag and drop a `.paf` file to view its contents and extract files to a virtual filesystem.
