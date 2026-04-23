@@ -67,9 +67,10 @@
                         <tbody id="file-list">
                         </tbody>
                     </table>
+                <div style="margin-top: 1rem;">
+                    <button id="extract-local-btn" class="btn primary" data-i18n="extract_local_btn">PCのフォルダに展開 (Extract to PC)</button>
                 </div>
-                <button id="extract-btn" class="btn primary" data-i18n="extract_btn">Extract All to Virtual FS</button>
-                <div id="extract-status"></div>
+                <div id="extract-status" style="margin-top: 1rem;"></div>
             </div>
         </div>
 
@@ -89,14 +90,12 @@
                 <h2><span data-i18n="selected_files">Selected Files</span> (<span id="compress-file-count">0</span>)</h2>
                 <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
                     <button id="compress-paf-btn" class="btn primary" data-i18n="btn_create_paf">Create .paf</button>
-                    <button id="compress-zip-btn" class="btn" style="background-color: #10b981; color: white;" data-i18n="btn_create_zip">Create .zip (OS Mountable)</button>
                 </div>
                 <a id="download-link" hidden></a>
             </div>
         </div>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="paf.js"></script>
     <script src="i18n.js"></script>
     <script src="app.js"></script>

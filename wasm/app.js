@@ -24,7 +24,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const exResults = document.getElementById('extract-results');
     const fileListBody = document.getElementById('file-list');
     const exLoading = document.getElementById('extract-loading');
-    const exBtn = document.getElementById('extract-btn');
     const exStatus = document.getElementById('extract-status');
 
     let currentArchiveName = "";
@@ -103,23 +102,76 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    exBtn.addEventListener('click', () => {
-        if (!currentArchiveName) return;
-        const outDir = '/out/';
-        try { Module.FS.mkdir(outDir); } catch(e) {}
-        
-        const c_path = Module.stringToNewUTF8('/' + currentArchiveName);
-        const c_out = Module.stringToNewUTF8(outDir);
-        const res = Module._wasm_paf_extract_all(c_path, c_out);
-        Module._free(c_path); Module._free(c_out);
-        
-        if (res === 0) {
-            exStatus.innerText = t("extract_success");
+    const exLocalBtn = document.getElementById('extract-local-btn');
+    if (exLocalBtn) {
+        if (!window.showDirectoryPicker) {
+            exLocalBtn.innerText = "Unsupported Browser (Use Chrome/Edge)";
+            exLocalBtn.disabled = true;
         } else {
-            exStatus.innerText = t("extract_fail");
-        }
-    });
+            exLocalBtn.addEventListener('click', async () => {
+                if (!currentArchiveName) return;
+                
+                try {
+                    // 1. ユーザーに保存先フォルダを選択させる
+                    const dirHandle = await window.showDirectoryPicker({
+                        mode: 'readwrite'
+                    });
+                    
+                    exLoading.classList.remove('hidden');
+                    
+                    // 2. 仮想FSに一旦すべて展開
+                    const outDir = '/out/';
+                    try { Module.FS.mkdir(outDir); } catch(e) {}
+                    const c_path = Module.stringToNewUTF8('/' + currentArchiveName);
+                    const c_out = Module.stringToNewUTF8(outDir);
+                    const res = Module._wasm_paf_extract_all(c_path, c_out);
+                    Module._free(c_path); Module._free(c_out);
+                    
+                    if (res !== 0) {
+                        exStatus.innerText = t("extract_fail");
+                        exLoading.classList.add('hidden');
+                        return;
+                    }
 
+                    // 3. 仮想FS (/out/) から PCのフォルダへ再帰的にコピー
+                    await copyVirtualDirToLocal(outDir, dirHandle);
+                    
+                    exStatus.innerText = t("extract_local_success") || "✅ Successfully saved to PC folder.";
+                } catch (err) {
+                    console.error(err);
+                    if (err.name !== 'AbortError') {
+                        exStatus.innerText = "❌ " + err.message;
+                    }
+                } finally {
+                    exLoading.classList.add('hidden');
+                }
+            });
+        }
+    }
+
+    // 仮想FSのディレクトリを再帰的にローカルへコピーする関数
+    async function copyVirtualDirToLocal(vPath, localDirHandle) {
+        const items = Module.FS.readdir(vPath);
+        for (let item of items) {
+            if (item === '.' || item === '..') continue;
+            
+            const itemPath = vPath + item;
+            const stat = Module.FS.stat(itemPath);
+            
+            if (Module.FS.isDir(stat.mode)) {
+                // サブディレクトリ作成
+                const subDirHandle = await localDirHandle.getDirectoryHandle(item, { create: true });
+                await copyVirtualDirToLocal(itemPath + '/', subDirHandle);
+            } else {
+                // ファイル書き込み
+                const fileData = Module.FS.readFile(itemPath);
+                const fileHandle = await localDirHandle.getFileHandle(item, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(fileData);
+                await writable.close();
+            }
+        }
+    }
 
     // ---- PACKAGE (まとめる) LOGIC ----
     const cmpDropZone = document.getElementById('compress-drop-zone');
