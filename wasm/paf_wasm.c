@@ -46,26 +46,13 @@ int wasm_paf_extract_all(const char* archive_path, const char* out_dir) {
     return paf_extract_binary(archive_path, out_dir, 1); // overwrite=1 (FS上は常に上書き許容)
 }
 
-// 複数ファイルからPAFアーカイブを作成する関数
-// paths_joined: "|"（パイプ）で区切られたファイルパスの文字列
+// 指定ディレクトリ内のファイルからPAFアーカイブを作成する関数
+// input_dir: 仮想FS上の入力ディレクトリパス（例: "/paf_input"）
 EMSCRIPTEN_KEEPALIVE
-int wasm_paf_create(const char* out_archive, const char* paths_joined) {
-    if (!paths_joined || strlen(paths_joined) == 0) return -1;
+int wasm_paf_create(const char* out_archive, const char* input_dir) {
+    if (!input_dir || strlen(input_dir) == 0) return -1;
     
-    // 入力文字列をコピーして strtok で分割できるようにする
-    char* paths_copy = strdup(paths_joined);
-    const char* paths[1024]; // 最大1024ファイルとする
-    int count = 0;
-    
-    char* token = strtok(paths_copy, "|");
-    while (token != NULL && count < 1024) {
-        paths[count++] = token;
-        token = strtok(NULL, "|");
-    }
-    
-    // PAF作成 (recursive_ignore=1)
-    int result = paf_create_binary(out_archive, paths, count, ".pafignore", 1);
-    
-    free(paths_copy);
-    return result;
+    const char* paths[1] = { input_dir };
+    // ignore_file_path=NULL, recursive_ignore=0 でシンプルにディレクトリを収集
+    return paf_create_binary(out_archive, paths, 1, NULL, 0);
 }

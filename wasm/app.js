@@ -211,30 +211,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            let paths = [];
+            // 一時入力ディレクトリを仮想FS上に作成
+            const inputDir = '/paf_input';
+            try { Module.FS.mkdir(inputDir); } catch(e) {}
+
+            // 全ファイルを /paf_input/ に書き込む
             for (let i = 0; i < filesToCompress.length; i++) {
                 const file = filesToCompress[i];
                 const arrayBuffer = await file.arrayBuffer();
                 const data = new Uint8Array(arrayBuffer);
-                const vPath = '/' + file.name;
-                Module.FS.writeFile(vPath, data);
-                paths.push(vPath);
+                Module.FS.writeFile(inputDir + '/' + file.name, data);
             }
 
-            const pathsJoined = paths.join("|");
-            const outArchive = "/created.paf";
-
+            const outArchive = '/created.paf';
             const c_out = Module.stringToNewUTF8(outArchive);
-            const c_paths = Module.stringToNewUTF8(pathsJoined);
+            const c_dir = Module.stringToNewUTF8(inputDir);
             
-            const res = Module._wasm_paf_create(c_out, c_paths);
+            const res = Module._wasm_paf_create(c_out, c_dir);
             
             Module._free(c_out);
-            Module._free(c_paths);
+            Module._free(c_dir);
 
             if (res === 0) {
                 const pafData = Module.FS.readFile(outArchive);
-                triggerDownload(pafData, "archive.paf", "application/octet-stream");
+                triggerDownload(pafData, 'archive.paf', 'application/octet-stream');
             } else {
                 alert(t("alert_paf_err"));
             }
@@ -250,10 +250,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function triggerDownload(dataArray, filename, mimeType) {
         const blob = new Blob([dataArray], { type: mimeType });
         const url = URL.createObjectURL(blob);
-        dlLink.href = url;
-        dlLink.download = filename;
-        dlLink.click();
-        URL.revokeObjectURL(url);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
 
