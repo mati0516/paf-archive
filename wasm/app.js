@@ -250,13 +250,30 @@ document.addEventListener('DOMContentLoaded', () => {
     function triggerDownload(dataArray, filename, mimeType) {
         const blob = new Blob([dataArray], { type: mimeType });
         const url = URL.createObjectURL(blob);
+
+        // 自動ダウンロードを試みる
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+        // フォールバック: UIにダウンロードリンクを表示
+        dlLink.href = url;
+        dlLink.download = filename;
+        dlLink.removeAttribute('hidden');
+        dlLink.style.display = 'inline-block';
+        dlLink.style.marginTop = '1rem';
+        dlLink.style.padding = '0.5rem 1rem';
+        dlLink.style.background = '#3b82f6';
+        dlLink.style.color = '#fff';
+        dlLink.style.borderRadius = '6px';
+        dlLink.style.textDecoration = 'none';
+        dlLink.style.fontWeight = '600';
+        dlLink.textContent = `📥 ${filename} をダウンロード`;
+
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
 
 
