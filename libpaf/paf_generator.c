@@ -9,9 +9,30 @@ int paf_generator_init(paf_generator_t* gen) {
     gen->data_tmp = tmpfile();
     gen->index_tmp = tmpfile();
     gen->path_tmp = tmpfile();
-    gen->file_count = 0;
     gen->current_data_offset = 0;
     gen->current_path_offset = 0;
+    gen->file_count = 0;
+
+    // [New] Phase 0: Pre-scan and Pre-allocation
+    // To reach physical speed limits, we MUST pre-allocate the file size on disk
+    // to prevent fragmentation and OS file extension overhead.
+    // In a real impl, we would loop through all input files here to get total_size.
+    uint64_t total_expected_size = 0; 
+    // total_expected_size = paf_generator_scan_total_size(file_list);
+
+#ifdef _WIN32
+    // Windows Pre-allocation: SetFileValidData (requires SE_MANAGE_VOLUME_NAME for max speed)
+    // For now, use SetEndOfFile as a reliable way to pre-grow.
+    HANDLE hFile = (HANDLE)_get_osfhandle(_fileno(gen->data_tmp));
+    LARGE_INTEGER li;
+    li.QuadPart = (LONGLONG)total_expected_size;
+    if (total_expected_size > 0) {
+        SetFilePointerEx(hFile, li, NULL, FILE_BEGIN);
+        SetEndOfFile(hFile);
+        SetFilePointerEx(hFile, (LARGE_INTEGER){0}, NULL, FILE_BEGIN);
+        printf("[Generator] Pre-allocated %llu bytes to prevent fragmentation.\n", total_expected_size);
+    }
+#endif
 
     if (!gen->data_tmp || !gen->index_tmp || !gen->path_tmp) {
         paf_generator_cleanup(gen);

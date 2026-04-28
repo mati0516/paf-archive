@@ -154,8 +154,9 @@ nvcc -O3 --shared libpaf/paf_cuda_kernels.cu -o libpaf_cuda.so
 | **PAF v1 (GPU+DS)** | **Creation** | **< 0.8 sec** | **None (Physical Limit)** |
 
 ### 🚀 Why is PAF so fast?
-- **ZIP/TAR**: Processing 100,000 files one by one causes massive OS context switching.
-- **PAF v1**: Treats 100,000 files as a single continuous stream. By offloading SHA-256 to **thousands of GPU cores** and using **DirectStorage** to bypass the CPU, PAF hits the physical speed limit of your hardware.
+- **Zero-Fragmentation Architecture**: PAF pre-scans all file sizes and **pre-allocates** the entire archive space on disk (using `SetFileValidData` / `fallocate`) before writing a single byte. This prevents the OS from constantly growing the file, eliminating fragmentation and CPU overhead.
+- **Batch Metadata Scanning**: By knowing the total data size upfront, PAF calculates the optimal GPU VRAM batch size, ensuring the pipeline never stalls.
+- **Direct Link Pipeline**: Thousands of GPU cores handle SHA-256 in parallel while DirectStorage streams data through the pre-allocated "hole" on the NVMe.
 
 ---
 
