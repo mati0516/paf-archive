@@ -17,14 +17,19 @@ This turns a multi-gigabyte extraction into a **near-instant differential sync**
 - ✅ **Smart Overwrite**: High-speed differential extraction using SHA-256 verification.
 - ✅ **Hash-based Deduplication**: Automatically shares data for identical files, saving storage.
 - ✅ **GPU Grep**: Instant parallel search across 100M+ files using VRAM.
-- ✅ **Mobile Optimized**: Support for Android (Vulkan/Posix) and iPhone (Metal/Darwin).
-- ✅ **Cross-Platform**: Windows (.dll), Linux (.so), macOS (.dylib), and Android (.so).
+- ✅ **Mobile Optimized**: Full support for Android (NDK/arm64) and iOS (Xcode/arm64).
+- ✅ **Cross-Platform**: Windows (.dll), Linux (.so), macOS (.dylib), Android (.so), and iOS (.dylib).
 
 ## 📥 Get the Libraries
-PAF is automatically built for all platforms via GitHub Actions.
+PAF is automatically built for all platforms (Windows, Linux, macOS, Android, iOS) via GitHub Actions.
 1. Go to the [Actions tab](https://github.com/mati0516/paf-archive/actions) in this repository.
 2. Click on the latest successful build.
-3. Download the `libpaf-artifacts` for your platform.
+3. Download the artifacts for your platform:
+   - `libpaf-windows-latest`
+   - `libpaf-ubuntu-latest`
+   - `libpaf-macos-latest`
+   - `libpaf-android`
+   - `libpaf-ios`
 
 ## ⚙️ Usage (C Library)
 

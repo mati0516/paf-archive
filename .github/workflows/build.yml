@@ -1,4 +1,4 @@
-name: Multi-Platform Build
+name: Multi-Platform Build (Incl. Mobile)
 
 on:
   push:
@@ -7,44 +7,62 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
-    name: Build on ${{ matrix.os }}
+  build-desktop:
+    name: Build Desktop (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
-
     steps:
     - uses: actions/checkout@v3
-
-    - name: Set up Environment (Linux)
-      if: matrix.os == 'ubuntu-latest'
-      run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-
-    - name: Build Library (Windows)
-      if: matrix.os == 'windows-latest'
+    - name: Build
       run: |
-        gcc -O3 -shared -Ilibpaf libpaf/*.c -o libpaf.dll
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          gcc -O3 -shared -Ilibpaf libpaf/*.c -o libpaf.dll
+        elif [ "$RUNNER_OS" == "Linux" ]; then
+          gcc -O3 -shared -fPIC -Ilibpaf libpaf/*.c -o libpaf.so
+        else
+          gcc -O3 -shared -Ilibpaf libpaf/*.c -o libpaf.dylib
+        fi
       shell: bash
-
-    - name: Build Library (Linux x64 & Android stub)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        gcc -O3 -shared -fPIC -Ilibpaf libpaf/*.c -o libpaf.so
-        # Android cross-compile test
-        aarch64-linux-gnu-gcc -O3 -shared -fPIC -Ilibpaf libpaf/*.c -o libpaf_android_arm64.so
-
-    - name: Build Library (macOS / iOS stub)
-      if: matrix.os == 'macos-latest'
-      run: |
-        gcc -O3 -shared -Ilibpaf libpaf/*.c -o libpaf.dylib
-
-    - name: Upload Artifacts
+    - name: Upload
       uses: actions/upload-artifact@v3
       with:
         name: libpaf-${{ matrix.os }}
-        path: |
-          libpaf.dll
-          libpaf.so
-          libpaf_android_arm64.so
-          libpaf.dylib
+        path: libpaf.*
+
+  build-android:
+    name: Build Android (NDK)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up NDK
+      uses: nndat/setup-ndk@v1
+      with:
+        ndk-version: r25c
+    - name: Build for Android (arm64-v8a)
+      run: |
+        $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang \
+        -O3 -shared -fPIC -Ilibpaf libpaf/*.c -o libpaf_android_arm64.so
+    - name: Upload Android Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: libpaf-android
+        path: libpaf_android_*.so
+
+  build-ios:
+    name: Build iOS (Xcode)
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build for iOS (Device)
+      run: |
+        xcrun --sdk iphoneos clang -O3 -dynamiclib -arch arm64 -Ilibpaf libpaf/*.c -o libpaf_ios.dylib
+    - name: Build for iOS (Simulator)
+      run: |
+        xcrun --sdk iphonesimulator clang -O3 -dynamiclib -arch x86_64 -Ilibpaf libpaf/*.c -o libpaf_ios_sim.dylib
+    - name: Upload iOS Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: libpaf-ios
+        path: libpaf_ios*.dylib
