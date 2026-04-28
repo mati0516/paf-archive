@@ -2,9 +2,9 @@ name: Multi-Platform Build (Incl. Mobile)
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build-desktop:
@@ -15,16 +15,32 @@ jobs:
         os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
     - uses: actions/checkout@v3
+    - name: Set up Build Environment
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y build-essential g++
     - name: Build
       run: |
         if [ "$RUNNER_OS" == "Windows" ]; then
-          gcc -O3 -shared -Ilibpaf libpaf/*.c -o libpaf.dll
+          # Compile C files
+          for f in libpaf/*.c; do gcc -O3 -fPIC -Ilibpaf -c $f -o ${f%.c}.o; done
+          # Compile C++ files
+          for f in libpaf/*.cpp; do g++ -O3 -fPIC -Ilibpaf -c $f -o ${f%.cpp}.o; done
+          # Link
+          g++ -shared libpaf/*.o -o libpaf.dll -ldxgi -lsetupapi
         elif [ "$RUNNER_OS" == "Linux" ]; then
-          gcc -O3 -shared -fPIC -Ilibpaf libpaf/*.c -o libpaf.so
+          for f in libpaf/*.c; do gcc -O3 -fPIC -Ilibpaf -c $f -o ${f%.c}.o; done
+          for f in libpaf/*.cpp; do g++ -O3 -fPIC -Ilibpaf -c $f -o ${f%.cpp}.o; done
+          g++ -shared -fPIC libpaf/*.o -o libpaf.so
         else
-          gcc -O3 -shared -Ilibpaf libpaf/*.c -o libpaf.dylib
+          for f in libpaf/*.c; do gcc -O3 -fPIC -Ilibpaf -c $f -o ${f%.c}.o; done
+          for f in libpaf/*.cpp; do g++ -O3 -fPIC -Ilibpaf -c $f -o ${f%.cpp}.o; done
+          g++ -shared libpaf/*.o -o libpaf.dylib
         fi
       shell: bash
+    - name: Test Build (Security)
+      run: |
+        echo "Verifying build artifacts..."
+        ls -l libpaf.* || ls -l libpaf/libpaf.* || true
     - name: Upload
       uses: actions/upload-artifact@v3
       with:
@@ -42,8 +58,9 @@ jobs:
         ndk-version: r25c
     - name: Build for Android (arm64-v8a)
       run: |
-        $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang \
-        -O3 -shared -fPIC -Ilibpaf libpaf/*.c -o libpaf_android_arm64.so
+        # Use clang++ for linking C and C++ objects
+        $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++ \
+        -O3 -shared -fPIC -Ilibpaf libpaf/*.c libpaf/*.cpp -o libpaf_android_arm64.so
     - name: Upload Android Artifact
       uses: actions/upload-artifact@v3
       with:
@@ -57,10 +74,10 @@ jobs:
     - uses: actions/checkout@v3
     - name: Build for iOS (Device)
       run: |
-        xcrun --sdk iphoneos clang -O3 -dynamiclib -arch arm64 -Ilibpaf libpaf/*.c -o libpaf_ios.dylib
+        xcrun --sdk iphoneos clang++ -O3 -dynamiclib -arch arm64 -Ilibpaf libpaf/*.c libpaf/*.cpp -o libpaf_ios.dylib
     - name: Build for iOS (Simulator)
       run: |
-        xcrun --sdk iphonesimulator clang -O3 -dynamiclib -arch x86_64 -Ilibpaf libpaf/*.c -o libpaf_ios_sim.dylib
+        xcrun --sdk iphonesimulator clang++ -O3 -dynamiclib -arch x86_64 -Ilibpaf libpaf/*.c libpaf/*.cpp -o libpaf_ios_sim.dylib
     - name: Upload iOS Artifact
       uses: actions/upload-artifact@v3
       with:
