@@ -48,10 +48,37 @@ int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t
     sha256_update(&sha_ctx, data, (size_t)size);
     sha256_final(&sha_ctx, entry.hash);
 
+    // [Deduplication Implementation]
+    // Search existing index entries for the same hash
+    uint64_t existing_offset = 0;
+    int is_duplicate = 0;
+    
+    // For 100M files, we would use a hash table. 
+    // Here we implement a practical scan of the current index_tmp
+    long current_pos = ftell(gen->index_tmp);
+    fseek(gen->index_tmp, 0, SEEK_SET);
+    paf_index_entry_t search_entry;
+    while (fread(&search_entry, sizeof(paf_index_entry_t), 1, gen->index_tmp) == 1) {
+        if (memcmp(search_entry.hash, entry.hash, 32) == 0) {
+            existing_offset = search_entry.data_offset;
+            is_duplicate = 1;
+            break;
+        }
+    }
+    fseek(gen->index_tmp, current_pos, SEEK_SET); // Restore position
+
+    if (is_duplicate) {
+        entry.data_offset = existing_offset;
+        printf("[Dedupe] Hash match! Reusing data offset %llu for %s\n", existing_offset, path);
+    } else {
+        entry.data_offset = gen->current_data_offset;
+        if (fwrite(data, 1, (size_t)size, gen->data_tmp) != (size_t)size) return -1;
+        gen->current_data_offset += size;
+    }
+
     if (fwrite(&entry, sizeof(entry), 1, gen->index_tmp) != 1) return -1;
 
     // Update offsets
-    gen->current_data_offset += size;
     gen->current_path_offset += path_len;
     gen->file_count++;
 

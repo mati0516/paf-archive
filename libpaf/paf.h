@@ -6,6 +6,8 @@
 #define PAF_MAGIC "PAF1"
 #define PAF_VERSION 0
 
+#define PAF_EXTRACT_SMART_OVERWRITE 0x01
+
 #pragma pack(push, 1)
 
 /**

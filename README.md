@@ -10,7 +10,8 @@ A next-generation, high-speed, non-compressed archive format optimized for **GPU
 - ✅ **Zero-Copy Indexing**: Instantly parse 100k+ file structures by loading the index directly into VRAM/RAM.
 - ✅ **Asynchronous I/O Support**: Architecture designed for `io_uring` and `DirectStorage`.
 - ✅ **SHA-256 Hash**: High-security integrity verification for every file (ideal for large datasets).
-- ✅ **Cross-Platform**: Core C library buildable on Windows (MSYS2/MinGW), Linux, and Android.
+- ✅ **Mobile Optimized**: Support for Android (Vulkan/Posix) and iPhone (Metal/Darwin) environments.
+- ✅ **Cross-Platform**: Core C library buildable on Windows (MSYS2/MinGW), Linux, Android, and iOS.
 - ✅ **UTF-8 Support**: Full support for multibyte filenames and complex hierarchies.
 
 ## ⚙️ Usage (C Library)

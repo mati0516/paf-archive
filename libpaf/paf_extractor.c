@@ -1,6 +1,8 @@
 #include "paf_extractor.h"
+#include "sha256.h"
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 int paf_extractor_peek_header(const char* path, paf_header_t* out_header) {
     if (!path || !out_header) return -1;
@@ -93,6 +95,37 @@ int paf_extractor_get_file(paf_extractor_t* ext, uint32_t index, char* out_path,
     // 1.1 Validate Path Safety
     if (!is_safe_path(out_path)) {
         return -3; // Malicious path detected
+    }
+
+    // [New] Smart Overwrite check
+    // If the file exists and flags indicate smart overwrite, compare hash
+    struct stat st;
+    if (stat(out_path, &st) == 0) {
+        if (st.st_size == (off_t)entry->data_size) {
+            // Read existing file and check SHA-256
+            FILE* existing_fp = fopen(out_path, "rb");
+            if (existing_fp) {
+                uint8_t* temp_buf = (uint8_t*)malloc((size_t)entry->data_size);
+                if (temp_buf) {
+                    fread(temp_buf, 1, (size_t)entry->data_size, existing_fp);
+                    uint8_t current_hash[32];
+                    sha256_context_t sha_ctx;
+                    sha256_init(&sha_ctx);
+                    sha256_update(&sha_ctx, temp_buf, (size_t)entry->data_size);
+                    sha256_final(&sha_ctx, current_hash);
+                    free(temp_buf);
+                    
+                    if (memcmp(current_hash, entry->hash, 32) == 0) {
+                        fclose(existing_fp);
+                        printf("[SmartExtract] Skipping %s (Identical hash)\n", out_path);
+                        if (out_size) *out_size = entry->data_size;
+                        *out_data = NULL; // Indicate skipped
+                        return 0;
+                    }
+                }
+                fclose(existing_fp);
+            }
+        }
     }
 
     // 2. Read Data
