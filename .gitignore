@@ -193,5 +193,11 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Test binaries and outputs
+/test_paf
+/test_paf_ext
+/test_paf2*
+*.paf
+
 # AI Agent configuration
-.clinerules
+.clinerules

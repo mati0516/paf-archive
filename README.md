@@ -1,142 +1,68 @@
-# 📦 Parallel Archive Format (PAF)
+# 📦 Parallel Archive Format (PAF) - Next Generation
 
-A high-speed, non-compressed archive format optimized for ease of use, transparency, and cross-platform support.
+A next-generation, high-speed, non-compressed archive format optimized for **GPU acceleration**, **Parallel I/O**, and **100k+ file datasets**.
 
 ## 🚀 Key Features
 
-- ✅ No compression (raw file copy)
-- ✅ Ultra-fast archive creation and extraction
-- ✅ UTF-8 filename support (including Japanese/multibyte)
-- ✅ Full folder hierarchy and recursive directory support
-- ✅ `.pafignore` auto-detection and explicit specification
-- ✅ `--ignore-from` support (uses `.gitignore`-style wildcards via `fnmatch()`)
-- ✅ CRC32 checksum per file
-- ✅ Path traversal protection (safe extraction)
-- ✅ Overwrite protection (root overwrite disabled by default)
-- ✅ C library (shared: `.so`, `.dll`, `.dylib`)
-- ✅ WebAssembly (WASM) Viewer & Creator with 12-language support
-- ✅ Fully cross-platform (Windows / Linux / macOS)
-- ✅ OS Mountable non-compressed .zip output in browser
-- ✅ MIT Licensed
-
-## 📦 Usage (Python CLI)
-
-Install:
-
-```bash
-pip install -e .
-```
-
-Then run:
-
-```bash
-paf create archive.paf myfolder/
-paf ls archive.paf
-paf extract archive.paf out/
-paf extract archive.paf out/ --overwrite
-```
-
-⚠️ Note: Only the C library has been fully tested as of now. Python CLI is under redevelopment and temporarily excluded from this version.
-
-## 🌐 WebAssembly (Browser UI)
-
-A fully functional browser-based UI is available for anyone to use immediately.
-
-> **🚀 Try it online: [https://mati0516.github.io/paf-archive/](https://mati0516.github.io/paf-archive/)**
-
-### Features
-- **Viewer**: Drag and drop a `.paf` file to view its contents and extract files to a virtual filesystem.
-- **Package**: Drag and drop multiple files to instantly create a new `.paf` archive or a non-compressed `.zip` file (OS mountable).
-- **Multi-language**: Supports 12 languages automatically (English, Japanese, Chinese, Spanish, Hindi, Arabic, French, Russian, Portuguese, German, Korean, Italian).
-
-### Usage
-1. Start a local server in the project root:
-   ```bash
-   python -m http.server 8080
-   ```
-2. Open `http://localhost:8080/wasm/index.html` in your browser.
+- ✅ **GPU-Ready Layout**: Fixed-length index structure (40 bytes) designed for massive parallel access.
+- ✅ **Physical Limit Performance**: Uses "Separate & Merge" strategy to eliminate disk seeks during archive creation.
+- ✅ **Zero-Copy Indexing**: Instantly parse 100k+ file structures by loading the index directly into VRAM/RAM.
+- ✅ **Asynchronous I/O Support**: Architecture designed for `io_uring` and `DirectStorage`.
+- ✅ **CRC32 Checksum**: Integrity verification for every file.
+- ✅ **Cross-Platform**: Core C library buildable on Windows (MSYS2/MinGW), Linux, and Android.
+- ✅ **UTF-8 Support**: Full support for multibyte filenames and complex hierarchies.
 
 ## ⚙️ Usage (C Library)
 
-```c
-#include "libpaf.h"
-
-const char* paths[] = {"file1.txt", "dir2"};
-paf_create_binary("out.paf", paths, 2, ".pafignore", 1); // last arg: recursive-ignore
-```
-
-Extract all:
+### Archive Creation (Generation Phase)
 
 ```c
-paf_extract_binary("out.paf", "out/", 0); // overwrite = 0
+#include "paf_generator.h"
+
+paf_generator_t gen;
+paf_generator_init(&gen);
+
+// Add files
+paf_generator_add_file(&gen, "hello.txt", (uint8_t*)"Hello World", 11);
+paf_generator_add_file(&gen, "data/huge.bin", buffer, 1024*1024);
+
+// Finalize (Binary Merge)
+paf_generator_finalize(&gen, "output.paf");
+paf_generator_cleanup(&gen);
 ```
 
-Extract single file or folder:
+### Archive Extraction (Extraction Phase)
 
 ```c
-paf_extract_file("out.paf", "dir2/note.txt", "out_single/");
-paf_extract_folder("out.paf", "dir2/", "out_dir/");
-```
+#include "paf_extractor.h"
 
-List entries:
+paf_extractor_t ext;
+paf_extractor_open(&ext, "output.paf");
 
-```c
-PafList list;
-if (paf_list_binary("out.paf", &list) == 0) {
-    for (uint32_t i = 0; i < list.count; ++i) {
-        printf("%s (%u bytes)\n", list.entries[i].path, list.entries[i].size);
-    }
-    free_paf_list(&list);
-}
-```
+char path[1024];
+uint8_t* data;
+uint64_t size;
 
-## 🧪 Test All Features
+// Random access by index
+paf_extractor_get_file(&ext, 0, path, &data, &size);
+printf("Extracted: %s (%lu bytes)\n", path, size);
 
-Run from `paf-archive/test/`:
-
-```cmd
-test.cmd
-```
-
-## 📁 Project Structure
-
-```
-paf-archive/
-├── libpaf/             # Core C library
-│   ├── libpaf_core.c
-│   ├── libpaf_list.c
-│   ├── libpaf_extract.c
-│   ├── libpaf_exists.c
-│   ├── libpaf_extra.c
-│   └── libpaf.h
-├── test/               # C-based functional tests
-│   ├── test_all.c
-│   ├── test.cmd
-│   └── ...
-├── dist/               # Built shared libraries
-│   ├── windows/libpaf.dll
-│   ├── linux/libpaf.so
-│   └── macos/libpaf.dylib
-├── bindings/           # Multi-language bindings
-│   ├── python/
-│   ├── go/
-│   ├── rust/
-│   ├── csharp/
-│   └── node/
-├── wasm/               # Planned browser viewer (WASM/JS)
-│   ├── index.html
-│   └── paf.js / paf.wasm
+paf_extractor_close(&ext);
 ```
 
 ## 📄 Format Layout (PAF v1)
+
+Designed for maximum parsing efficiency.
 
 ```
 +----------------------+
 | Header (32 bytes)    |
 +----------------------+
-| File Data Block      |
+| Data Block           | (Raw file contents)
 +----------------------+
-| File Index Block     |
+| Index Block          | (Fixed-length 40-byte entries)
++----------------------+
+| Path Buffer          | (Aggregated path strings)
 +----------------------+
 ```
 
@@ -145,22 +71,34 @@ paf-archive/
 | Offset | Type    | Description                  |
 |--------|---------|------------------------------|
 | 0–3    | char[4] | Magic: `'PAF1'`              |
-| 4–7    | uint32  | File count                   |
-| 8–11   | uint32  | Offset to index block        |
-| 12–31  | char[20]| Reserved (zero-filled)       |
+| 4–7    | uint32  | Version: `1`                 |
+| 8–11   | uint32  | Flags                        |
+| 12–15  | uint32  | File count                   |
+| 16–23  | uint64  | Offset to Index Block        |
+| 24–31  | uint64  | Offset to Path Buffer        |
 
-### File Index Block
+### Index Entry (40 bytes - Fixed Size)
 
-Each entry contains:
+| Offset | Type    | Description                      |
+|--------|---------|----------------------------------|
+| 0–7    | uint64  | Path Buffer Offset               |
+| 8–11   | uint32  | Path Length                      |
+| 12–19  | uint64  | Data Offset (relative to block)  |
+| 20–27  | uint64  | Data Size                        |
+| 28–31  | uint32  | CRC32 Checksum                   |
+| 32–35  | uint32  | Flags                            |
+| 36–39  | uint32  | Reserved                         |
 
-- Filename length (2 bytes)
-- UTF-8 path (N bytes)
-- File size (4 bytes)
-- Offset (4 bytes)
-- CRC32 (4 bytes)
+## 🧪 Development
+
+### Building via WSL (Ubuntu/gcc)
+```bash
+# Build test
+wsl gcc -O2 -Wall -Ilibpaf libpaf/*.c test/test_paf_create.c -o test_paf
+wsl ./test_paf
+```
 
 ---
 
 ## 📜 License
-
 MIT License
