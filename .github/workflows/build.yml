@@ -42,7 +42,7 @@ jobs:
         echo "Verifying build artifacts..."
         ls -l libpaf.* || ls -l libpaf/libpaf.* || true
     - name: Upload
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: libpaf-${{ matrix.os }}
         path: libpaf.*
@@ -62,7 +62,7 @@ jobs:
         $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++ \
         -O3 -shared -fPIC -Ilibpaf libpaf/*.c libpaf/*.cpp -o libpaf_android_arm64.so
     - name: Upload Android Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: libpaf-android
         path: libpaf_android_*.so
@@ -79,7 +79,7 @@ jobs:
       run: |
         xcrun --sdk iphonesimulator clang++ -O3 -dynamiclib -arch x86_64 -Ilibpaf libpaf/*.c libpaf/*.cpp -o libpaf_ios_sim.dylib
     - name: Upload iOS Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: libpaf-ios
         path: libpaf_ios*.dylib
