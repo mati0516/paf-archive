@@ -27,11 +27,10 @@ typedef struct {
 typedef struct {
     uint64_t path_buffer_offset; // Offset within Path Buffer
     uint32_t path_length;        // Length of path string
+    uint32_t flags;              // Per-file flags (e.g. compression type)
     uint64_t data_offset;        // Offset within Data Block (relative to start of Data Block)
     uint64_t data_size;          // Size of file data
-    uint32_t crc32;              // CRC32 checksum
-    uint32_t flags;              // Per-file flags (e.g. compression type)
-    uint32_t reserved;           // Alignment / Future use
+    uint8_t  hash[32];           // SHA-256 hash
 } paf_index_entry_t;
 
 #pragma pack(pop)

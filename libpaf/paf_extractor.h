@@ -19,11 +19,12 @@ int paf_extractor_open(paf_extractor_t* ext, const char* path);
  * Extract a file by index.
  * @param ext The extractor session.
  * @param index The index of the file (0 to file_count-1).
- * @param out_path Buffer to store the path (must be large enough).
+ * @param out_path Buffer to store the path.
+ * @param path_max_len Size of the out_path buffer.
  * @param out_data Pointer to a pointer that will hold the allocated data.
  * @param out_size Pointer to store the size of the data.
  */
-int paf_extractor_get_file(paf_extractor_t* ext, uint32_t index, char* out_path, uint8_t** out_data, uint64_t* out_size);
+int paf_extractor_get_file(paf_extractor_t* ext, uint32_t index, char* out_path, size_t path_max_len, uint8_t** out_data, uint64_t* out_size);
 
 /**
  * Close the extractor and free resources.

@@ -16,8 +16,11 @@ int main() {
         uint8_t* data = NULL;
         uint64_t size = 0;
 
-        if (paf_extractor_get_file(&ext, i, path, &data, &size) == 0) {
+        if (paf_extractor_get_file(&ext, i, path, sizeof(path), &data, &size) == 0) {
             printf("[%u] Path: %s, Size: %lu bytes\n", i, path, size);
+            printf("    SHA-256: ");
+            for (int j = 0; j < 32; j++) printf("%02x", ext.entries[i].hash[j]);
+            printf("\n");
             if (i == 0) {
                 printf("    Content: %.*s\n", (int)size, (char*)data);
             } else if (i == 1) {

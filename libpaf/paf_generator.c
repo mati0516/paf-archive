@@ -1,9 +1,8 @@
 #include "paf_generator.h"
+#include "sha256.h"
 #include <stdlib.h>
 #include <string.h>
 
-// Forward declaration of crc32 from libpaf_core.c
-uint32_t crc32(const unsigned char* data, size_t length);
 
 int paf_generator_init(paf_generator_t* gen) {
     if (!gen) return -1;
@@ -24,7 +23,10 @@ int paf_generator_init(paf_generator_t* gen) {
 int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t* data, uint64_t size) {
     if (!gen || !path || !data) return -1;
 
-    uint32_t path_len = (uint32_t)strlen(path);
+    size_t actual_path_len = strlen(path);
+    if (actual_path_len > 0xFFFFFFFF) return -1; // Path too long
+
+    uint32_t path_len = (uint32_t)actual_path_len;
     
     // 1. Write to Path Buffer
     if (fwrite(path, 1, path_len, gen->path_tmp) != path_len) return -1;
@@ -37,10 +39,14 @@ int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t
     memset(&entry, 0, sizeof(entry));
     entry.path_buffer_offset = gen->current_path_offset;
     entry.path_length = path_len;
+    entry.flags = 0;
     entry.data_offset = gen->current_data_offset;
     entry.data_size = size;
-    entry.crc32 = crc32(data, (size_t)size);
-    entry.flags = 0;
+    
+    sha256_context_t sha_ctx;
+    sha256_init(&sha_ctx);
+    sha256_update(&sha_ctx, data, (size_t)size);
+    sha256_final(&sha_ctx, entry.hash);
 
     if (fwrite(&entry, sizeof(entry), 1, gen->index_tmp) != 1) return -1;
 
