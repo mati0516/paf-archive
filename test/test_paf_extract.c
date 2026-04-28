@@ -3,6 +3,12 @@
 #include <stdlib.h>
 
 int main() {
+    paf_header_t header;
+    if (paf_extractor_peek_header("output.paf", &header) == 0) {
+        printf("[Peek] Archive Version: %u, Files: %u\n", header.version, header.file_count);
+        printf("[Peek] Expected Index Memory: %llu KB\n", (uint64_t)header.file_count * 64 / 1024);
+    }
+
     paf_extractor_t ext;
     if (paf_extractor_open(&ext, "output.paf") != 0) {
         fprintf(stderr, "Failed to open output.paf\n");

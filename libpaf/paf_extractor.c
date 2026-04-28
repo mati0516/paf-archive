@@ -2,6 +2,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+int paf_extractor_peek_header(const char* path, paf_header_t* out_header) {
+    if (!path || !out_header) return -1;
+    
+    FILE* fp = fopen(path, "rb");
+    if (!fp) return -1;
+
+    if (fread(out_header, sizeof(paf_header_t), 1, fp) != 1) {
+        fclose(fp);
+        return -1;
+    }
+
+    if (memcmp(out_header->magic, PAF_MAGIC, 4) != 0) {
+        fclose(fp);
+        return -2;
+    }
+
+    fclose(fp);
+    return 0;
+}
+
 int paf_extractor_open(paf_extractor_t* ext, const char* path) {
     if (!ext || !path) return -1;
     
@@ -21,8 +41,9 @@ int paf_extractor_open(paf_extractor_t* ext, const char* path) {
     }
 
     // 3. Load Index Entries
-    // Security check: Limit max files to 1 million to prevent memory exhaustion (DoS)
-    if (ext->header.file_count > 1000000) {
+    // Security check: Limit max files to 1 billion (approx 64GB index) for GenAI datasets.
+    // Ensure the system has enough RAM to hold the index.
+    if (ext->header.file_count > 1000000000) {
         fclose(ext->fp);
         return -4;
     }

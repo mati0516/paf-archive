@@ -11,7 +11,12 @@ typedef struct {
 } paf_extractor_t;
 
 /**
- * Open a PAF v2 archive for extraction.
+ * Peek at the header of a PAF archive without allocating memory for index.
+ */
+int paf_extractor_peek_header(const char* path, paf_header_t* out_header);
+
+/**
+ * Open a PAF v1 archive for extraction.
  */
 int paf_extractor_open(paf_extractor_t* ext, const char* path);
 

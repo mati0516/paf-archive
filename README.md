@@ -1,6 +1,7 @@
-# 📦 Parallel Archive Format (PAF) - Next Generation
+# 📦 Parallel Archive Format (PAF) - Beta (Pre-v1.0)
 
 A next-generation, high-speed, non-compressed archive format optimized for **GPU acceleration**, **Parallel I/O**, and **100k+ file datasets**.
+*Current Status: Beta. Version 1.0 will be released upon implementation of GPU-accelerated compression (Goal: 1 million files in seconds).*
 
 ## 🚀 Key Features
 
