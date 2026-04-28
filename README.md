@@ -107,13 +107,40 @@ Designed for maximum parsing efficiency.
 | 24–31  | uint64  | Data Size                        |
 | 32–63  | uint8[32]| SHA-256 Hash                    |
 
-## 🧪 Development
+## ⚙️ Multi-Platform Integration Guide
 
-### Building via WSL (Ubuntu/gcc)
+### 💻 Desktop (Windows, Linux, macOS)
+Download the shared library (`.dll`, `.so`, or `.dylib`) and include `paf.h`.
+
+**Compile Command:**
 ```bash
-# Build test
-wsl gcc -O2 -Wall -Ilibpaf libpaf/*.c test/test_paf_create.c -o test_paf
-wsl ./test_paf
+# Example for Linux
+gcc main.c -L. -lpaf -Ilibpaf -o my_app
+```
+
+### 🤖 Android (NDK)
+1. Copy `libpaf_android_arm64.so` to your project's `src/main/jniLibs/arm64-v8a/` directory.
+2. In your `CMakeLists.txt`:
+```cmake
+add_library(libpaf SHARED IMPORTED)
+set_target_properties(libpaf PROPERTIES IMPORTED_LOCATION ${CMAKE_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}/libpaf.so)
+target_link_libraries(my_jni_target libpaf)
+```
+
+### 🍎 iOS (Xcode)
+1. Download `libpaf_ios.dylib`.
+2. Drag and drop the library into your Xcode project.
+3. Under **General > Frameworks, Libraries, and Embedded Content**, ensure it is set to "Embed & Sign".
+4. Add `libpaf/` to your **Header Search Paths**.
+
+## 🧪 Development & Build
+If you want to build the source yourself:
+```bash
+# Desktop
+gcc -O3 -shared -fPIC -Ilibpaf libpaf/*.c -o libpaf.so
+
+# GPU Engine (Requires CUDA)
+nvcc -O3 --shared libpaf/paf_cuda_kernels.cu -o libpaf_cuda.so
 ```
 
 ---
