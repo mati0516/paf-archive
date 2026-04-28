@@ -68,8 +68,8 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
-docs/_build/
+# Documentation
+docs/
 
 # PyBuilder
 .pybuilder/
@@ -194,5 +194,4 @@ cython_debug/
 .cursorindexingignore
 
 # AI Agent configuration
-.clinerules
-docs/agent_setup/
+.clinerules
