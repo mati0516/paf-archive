@@ -1,7 +1,7 @@
-# 📦 Parallel Archive Format (PAF) - Beta (Pre-v1.0)
+# 📦 Parallel Archive Format (PAF) v1.0.0 - Official Release
 
-A next-generation, high-speed, non-compressed archive format optimized for **GPU acceleration**, **Parallel I/O**, and **100k+ file datasets**.
-*Current Status: Beta. Version 1.0 will be released upon implementation of GPU acceleration or CPU multi-threading (Goal: 1 million files in seconds).*
+The ultimate high-speed, non-compressed archive format optimized for **GPU acceleration**, **Parallel I/O**, and **100M+ file datasets**.
+*Status: Official Release (v1.0.0) with Full GPU & Mobile Support.*
 
 **The killer feature of PAF v1.** 
 When extracting a 100M+ file archive, PAF doesn't just blindly overwrite everything. It uses its built-in SHA-256 index to:

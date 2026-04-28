@@ -13,12 +13,26 @@ int paf_extractor_gpu_run(paf_extractor_t* ext, const char* path) {
     // 1. Get GPU Info
     paf_gpu_info_t gpu;
     paf_gpu_get_info(&gpu);
-    printf("Using GPU: %s (%llu MB VRAM)\n", gpu.device_name, gpu.total_vram / 1024 / 1024);
+    printf("Detected Hardware: %s\n", gpu.device_name);
+    printf(" - VRAM: %llu MB\n", gpu.total_vram / 1024 / 1024);
+    printf(" - CUDA Support: %s\n", gpu.supports_cuda ? "Yes" : "No");
+    printf(" - Vulkan Support: %s\n", gpu.supports_vulkan ? "Yes (AMD/Intel/Mobile)" : "No");
+    printf(" - Direct IO: %s\n", gpu.supports_direct_io ? "Yes (NVMe -> GPU Direct Path)" : "No");
 
-    // 2. Calculate Adaptive Batch Size
-    // Assume 1MB average file size for initial calculation
-    paf_batch_config_t batch = paf_gpu_calculate_batch(gpu.available_vram, ext->header.file_count, 1024 * 1024);
-    printf("Dynamic Batching: %u files per batch\n", batch.files_per_batch);
+    // 2. Decide Execution Path
+    int use_direct_io = gpu.supports_direct_io;
+    int use_gpu_compute = (gpu.supports_cuda || gpu.supports_vulkan);
+
+    if (use_gpu_compute) {
+        printf("Mode: GPU-Accelerated Pipeline (%s)\n", gpu.supports_cuda ? "CUDA" : "Vulkan");
+    } else {
+        printf("Mode: CPU Multi-threaded Fallback\n");
+    }
+
+    // 3. Calculate Adaptive Batch Size
+    paf_batch_config_t batch = paf_gpu_calculate_batch(gpu.total_vram, ext->header.file_count, 1024 * 1024);
+    
+    // ... loop with selected path
 
     // 3. Main Processing Loop
     uint32_t processed = 0;

@@ -8,6 +8,9 @@ typedef struct {
     uint64_t available_vram;
     uint32_t compute_units;
     char device_name[256];
+    int supports_cuda;
+    int supports_vulkan;      // AMD/Intel/Mobile Support
+    int supports_direct_io;   // DirectStorage/GDS Support
 } paf_gpu_info_t;
 
 typedef struct {

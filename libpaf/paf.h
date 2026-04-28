@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define PAF_MAGIC "PAF1"
-#define PAF_VERSION 0
+#define PAF_VERSION 1
 
 #define PAF_EXTRACT_SMART_OVERWRITE 0x01
 
