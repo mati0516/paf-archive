@@ -3,16 +3,28 @@
 A next-generation, high-speed, non-compressed archive format optimized for **GPU acceleration**, **Parallel I/O**, and **100k+ file datasets**.
 *Current Status: Beta. Version 1.0 will be released upon implementation of GPU acceleration or CPU multi-threading (Goal: 1 million files in seconds).*
 
-## 🚀 Key Features
+**The killer feature of PAF v1.** 
+When extracting a 100M+ file archive, PAF doesn't just blindly overwrite everything. It uses its built-in SHA-256 index to:
+1. Check if the file already exists.
+2. Compare the hash of the local file with the archive.
+3. **Skip writing** if they are identical.
 
+This turns a multi-gigabyte extraction into a **near-instant differential sync**, saving both time and SSD lifespan.
+
+## 🚀 Key Features
 - ✅ **GPU-Ready Layout**: Fixed-length index structure (64 bytes) designed for massive parallel access.
-- ✅ **Physical Limit Performance**: Uses "Separate & Merge" strategy to eliminate disk seeks during archive creation.
-- ✅ **Zero-Copy Indexing**: Instantly parse 100k+ file structures by loading the index directly into VRAM/RAM.
-- ✅ **Asynchronous I/O Support**: Architecture designed for `io_uring` and `DirectStorage`.
-- ✅ **SHA-256 Hash**: High-security integrity verification for every file (ideal for large datasets).
-- ✅ **Mobile Optimized**: Support for Android (Vulkan/Posix) and iPhone (Metal/Darwin) environments.
-- ✅ **Cross-Platform**: Core C library buildable on Windows (MSYS2/MinGW), Linux, Android, and iOS.
-- ✅ **UTF-8 Support**: Full support for multibyte filenames and complex hierarchies.
+- ✅ **Physical Limit Performance**: Uses "Separate & Merge" strategy to eliminate disk seeks.
+- ✅ **Smart Overwrite**: High-speed differential extraction using SHA-256 verification.
+- ✅ **Hash-based Deduplication**: Automatically shares data for identical files, saving storage.
+- ✅ **GPU Grep**: Instant parallel search across 100M+ files using VRAM.
+- ✅ **Mobile Optimized**: Support for Android (Vulkan/Posix) and iPhone (Metal/Darwin).
+- ✅ **Cross-Platform**: Windows (.dll), Linux (.so), macOS (.dylib), and Android (.so).
+
+## 📥 Get the Libraries
+PAF is automatically built for all platforms via GitHub Actions.
+1. Go to the [Actions tab](https://github.com/mati0516/paf-archive/actions) in this repository.
+2. Click on the latest successful build.
+3. Download the `libpaf-artifacts` for your platform.
 
 ## ⚙️ Usage (C Library)
 
