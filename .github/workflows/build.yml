@@ -1,4 +1,4 @@
-name: Multi-Platform Build (Incl. Mobile)
+name: Multi-Platform Build v1.0.4
 
 on:
   push:
@@ -7,64 +7,38 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-desktop:
-    name: Build Desktop (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+    - name: Build Windows DLL
+      run: |
+        cl /O2 /LD /Ilibpaf libpaf/libpaf_core.c libpaf/libpaf_extract.c libpaf/libpaf_list.c libpaf/paf_generator.c libpaf/paf_extractor.c libpaf/paf_gpu.c libpaf/sha256.c /Fe:libpaf.dll
+    - name: Upload Windows Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: libpaf-windows
+        path: |
+          libpaf.dll
+          libpaf.lib
+
+  build-linux-mac:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Build
       run: |
         gcc -O3 -shared -fPIC -Ilibpaf libpaf/libpaf_core.c libpaf/libpaf_extract.c libpaf/libpaf_list.c \
         libpaf/paf_generator.c libpaf/paf_extractor.c libpaf/paf_gpu.c libpaf/sha256.c \
-        -o libpaf.${{ matrix.os == 'windows-latest' && 'dll' || (matrix.os == 'macos-latest' && 'dylib' || 'so') }}
-      shell: bash
-    - name: Test Build (Security)
-      run: |
-        echo "Verifying build artifacts..."
-        ls -l libpaf.* || ls -l libpaf/libpaf.* || true
-    - name: Upload
+        -o libpaf.${{ matrix.os == 'macos-latest' && 'dylib' || 'so' }}
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: libpaf-${{ matrix.os }}
         path: libpaf.*
-
-  build-android:
-    name: Build Android (NDK)
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: Setup Android NDK
-      uses: nwtgck/actions-setup-ndk@v1
-      with:
-        ndk-version: r25c
-    - name: Build for Android (arm64-v8a)
-      run: |
-        $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang \
-        -O3 -shared -fPIC -Ilibpaf libpaf/libpaf_core.c libpaf/libpaf_extract.c libpaf/libpaf_list.c \
-        libpaf/paf_generator.c libpaf/paf_extractor.c libpaf/paf_gpu.c libpaf/sha256.c -o libpaf_android_arm64.so
-    - name: Upload Android Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: libpaf-android
-        path: libpaf_android_*.so
-
-  build-ios:
-    name: Build iOS (Xcode)
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: Build for iOS (Device)
-      run: |
-        xcrun --sdk iphoneos clang++ -O3 -dynamiclib -arch arm64 -Ilibpaf libpaf/*.c libpaf/*.cpp -o libpaf_ios.dylib
-    - name: Build for iOS (Simulator)
-      run: |
-        xcrun --sdk iphonesimulator clang++ -O3 -dynamiclib -arch x86_64 -Ilibpaf libpaf/*.c libpaf/*.cpp -o libpaf_ios_sim.dylib
-    - name: Upload iOS Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: libpaf-ios
-        path: libpaf_ios*.dylib
