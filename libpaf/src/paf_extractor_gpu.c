@@ -7,8 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-// External DirectStorage wrapper (only on Windows)
-#ifdef _WIN32
+// External DirectStorage wrapper (only on Windows, and not in CI)
+#if defined(_WIN32) && !defined(PAF_CI_BUILD)
 int paf_io_directstorage_load(const wchar_t* path, uint64_t offset, uint64_t size, void* destination);
 #else
 static int paf_io_directstorage_load(const void* path, uint64_t offset, uint64_t size, void* destination) {
