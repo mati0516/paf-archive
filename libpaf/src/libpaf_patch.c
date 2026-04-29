@@ -33,23 +33,29 @@ int paf_patch_apply(const char* new_paf_path, const paf_delta_t* delta,
                     const char* dst_dir, paf_progress_fn progress, void* user_data) {
     if (!new_paf_path || !delta || !dst_dir) return -1;
 
+    int errors = 0;
     for (uint32_t i = 0; i < delta->count; i++) {
         const paf_delta_entry_t* e = &delta->entries[i];
 
         char fullpath[1024];
-        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", dst_dir, e->path) >= (int)sizeof(fullpath))
-            goto next;
-
-        if (e->status == PAF_DELTA_DELETED) {
-            UNLINK(fullpath);
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", dst_dir, e->path) >= (int)sizeof(fullpath)) {
+            fprintf(stderr, "paf_patch_apply: path too long, skipping: %s\n", e->path);
+            errors++;
+        } else if (e->status == PAF_DELTA_DELETED) {
+            if (UNLINK(fullpath) != 0) {
+                fprintf(stderr, "paf_patch_apply: failed to delete: %s\n", fullpath);
+                errors++;
+            }
         } else {
             make_parent_dirs(fullpath);
-            paf_extract_file(new_paf_path, e->path, fullpath);
+            if (paf_extract_file(new_paf_path, e->path, fullpath) != 0) {
+                fprintf(stderr, "paf_patch_apply: failed to extract: %s\n", e->path);
+                errors++;
+            }
         }
 
-next:
         if (progress) progress(i + 1, delta->count, e->path, user_data);
     }
 
-    return 0;
+    return errors > 0 ? -errors : 0;
 }
