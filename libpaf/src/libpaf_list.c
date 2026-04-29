@@ -9,32 +9,36 @@ int paf_list_binary(const char* paf_path, PafList* out_list) {
     FILE* fp = fopen(paf_path, "rb");
     if (!fp) return -1;
 
-    char magic[4];
-    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    paf_header_t header;
+    if (fread(&header, sizeof(header), 1, fp) != 1 || memcmp(header.magic, PAF_MAGIC, 4) != 0) {
         fclose(fp);
         return -2;
     }
 
-    uint32_t file_count;
-    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
-        fclose(fp);
-        return -3;
+    out_list->entries = (PafEntry*)malloc(sizeof(PafEntry) * header.file_count);
+    out_list->count = header.file_count;
+
+    // 1. Read Index Table
+    paf_index_entry_t* idx_table = (paf_index_entry_t*)malloc(sizeof(paf_index_entry_t) * header.file_count);
+    fseek(fp, header.index_offset, SEEK_SET);
+    fread(idx_table, sizeof(paf_index_entry_t), header.file_count, fp);
+
+    // 2. Read Path Buffer and fill PafEntry
+    for (uint32_t i = 0; i < header.file_count; ++i) {
+        fseek(fp, header.path_offset + idx_table[i].path_buffer_offset, SEEK_SET);
+        uint32_t path_len = idx_table[i].path_length;
+        if (path_len >= 1024) path_len = 1023;
+        
+        fread(out_list->entries[i].path, 1, path_len, fp);
+        out_list->entries[i].path[path_len] = '\0';
+        
+        out_list->entries[i].size = (uint32_t)idx_table[i].data_size;
+        out_list->entries[i].offset = (uint32_t)idx_table[i].data_offset;
+        out_list->entries[i].crc32 = idx_table[i].flags;
+        memcpy(out_list->entries[i].hash, idx_table[i].hash, 32);
     }
 
-    out_list->entries = (PafEntry*)malloc(sizeof(PafEntry) * file_count);
-    out_list->count = file_count;
-
-    for (uint32_t i = 0; i < file_count; ++i) {
-        uint16_t len;
-        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
-        if (fread(out_list->entries[i].path, 1, len, fp) != len) break;
-        out_list->entries[i].path[len] = '\0';
-
-        (void)fread(&out_list->entries[i].size, sizeof(uint32_t), 1, fp);
-        (void)fread(&out_list->entries[i].offset, sizeof(uint32_t), 1, fp);
-        (void)fread(&out_list->entries[i].crc32, sizeof(uint32_t), 1, fp);
-    }
-
+    free(idx_table);
     fclose(fp);
     return 0;
 }
