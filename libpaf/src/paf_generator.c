@@ -93,7 +93,7 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
         free(gen->batch_paths[i]);
     }
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(PAF_USE_CUDA)
     cudaFree(d_data); cudaFree(d_hashes); cudaFree(d_offsets); cudaFree(d_sizes);
 #endif
     free(host_hashes);
