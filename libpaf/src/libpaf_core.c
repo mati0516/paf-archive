@@ -1,3 +1,4 @@
+#define LIBPAF_EXPORTS
 #include "libpaf.h"
 #include <stdio.h>
 #include <stdlib.h>

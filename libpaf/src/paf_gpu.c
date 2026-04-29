@@ -1,3 +1,4 @@
+#define LIBPAF_EXPORTS
 #include "paf_gpu.h"
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,3 +1,4 @@
+#define LIBPAF_EXPORTS
 #include "paf_extractor.h"
 #include "sha256.h"
 #include <stdlib.h>
