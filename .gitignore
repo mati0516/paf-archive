@@ -211,4 +211,4 @@ cython_debug/
 *.ilk
 
 # AI Agent configuration
-.clinerules
+.clineruleslocal_build/

@@ -7,6 +7,7 @@
 #define PAF_VERSION 1
 
 #define PAF_EXTRACT_SMART_OVERWRITE 0x01
+#define PAF_FLAG_INDEX_ONLY         0x02
 
 #ifdef _WIN32
   #ifdef LIBPAF_EXPORTS

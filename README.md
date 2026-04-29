@@ -13,6 +13,9 @@ It is designed to eliminate I/O bottlenecks and provide massive throughput for p
   - **Linux (WSL)**: High-performance C core for server environments.
   - **Android (ARM64)**: Optimized for mobile high-speed archiving.
 - **Zero-Copy Architecture**: Minimized memory copying via optimized internal flat buffers.
+- **Delta Engine**: High-speed O(N) archive comparison using SHA-256 for instant update detection.
+- **Index-Only Archives (.pafi)**: Metadata-only export for remote sync and delta calculation without full data.
+- **DirectStorage Patching (C++)**: Batch copy updated/added files directly from NVMe to memory using DS v1.2.2.
 
 ## 📁 Directory Structure
 
@@ -51,24 +54,35 @@ Measured on an RTX 2080 GPU with DirectStorage enabled.
 > [!TIP]
 > PAF is approximately **15x faster** than ZIP and significantly faster than TAR when GPU acceleration is utilized.
 
-## 🛠️ Binary Specification (v1)
+## 🛠️ Binary Specification (v2)
 
-The PAF format is designed for minimal parsing overhead.
+The PAF format is designed for maximum throughput and GPU-friendly parallel processing.
 
-1. **Header (8 bytes)**
+1. **Header (32 bytes)**
    - Magic: `PAF1` (4 bytes)
+   - Version: `uint32_t` (4 bytes) - Currently `1` (v2 spec)
+   - Flags: `uint32_t` (4 bytes)
    - File Count: `uint32_t` (4 bytes)
+   - Index Offset: `uint64_t` (8 bytes) - Absolute offset to the Index Block
+   - Path Offset: `uint64_t` (8 bytes) - Absolute offset to the Path Buffer
 
-2. **Index Table (Variable)**
-   - Per-file entry:
-     - Path Length: `uint16_t` (2 bytes)
-     - Path String: `char[Path Length]` (Variable)
-     - Data Size: `uint32_t` (4 bytes)
-     - Data Offset: `uint32_t` (4 bytes) - Relative to the start of the data block
-     - CRC32/Hash: `uint32_t` (4 bytes)
+2. **Index Block (Fixed 64 bytes per entry)**
+   - Designed for GPU coalesced access and fast delta comparison.
+   - Path Buffer Offset: `uint64_t` (8 bytes)
+   - Path Length: `uint32_t` (4 bytes)
+   - Flags: `uint32_t` (4 bytes)
+   - Data Offset: `uint64_t` (8 bytes)
+   - Data Size: `uint64_t` (8 bytes)
+   - **SHA-256 Hash**: `uint8_t[32]` (32 bytes) - High-precision file integrity and delta matching.
 
-3. **Data Block (Variable)**
-   - Raw file data stored contiguously in the order of the index table.
+3. **Path Buffer (Variable)**
+   - Null-terminated UTF-8 file paths.
+
+4. **Data Block (Variable)**
+   - Raw file data stored contiguously.
+
+5. **Index-Only Flag**
+   - When `header.flags & 0x02` (PAF_FLAG_INDEX_ONLY) is set, the Data Block is empty.
 
 ## 📦 Official Pre-built Binaries (GPU + DirectStorage)
 

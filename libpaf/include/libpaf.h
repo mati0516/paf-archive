@@ -33,6 +33,7 @@ PAF_API int paf_extract_binary(const char* paf_path, const char* output_dir, int
 
 // Retrieve the list of files in the archive
 PAF_API int paf_list_binary(const char* paf_path, PafList* out_list);
+PAF_API int paf_export_index(const char* paf_path, const char* out_index_path);
 PAF_API void free_paf_list(PafList* list);
 
 // Extract a single file from the archive

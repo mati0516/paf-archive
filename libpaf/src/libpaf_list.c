@@ -43,6 +43,64 @@ int paf_list_binary(const char* paf_path, PafList* out_list) {
     return 0;
 }
 
+PAF_API int paf_export_index(const char* paf_path, const char* out_index_path) {
+    FILE* fin = fopen(paf_path, "rb");
+    if (!fin) return -1;
+
+    paf_header_t header;
+    if (fread(&header, sizeof(header), 1, fin) != 1) {
+        fclose(fin);
+        return -1;
+    }
+
+    if (memcmp(header.magic, PAF_MAGIC, 4) != 0) {
+        fclose(fin);
+        return -2;
+    }
+
+    // Calculate metadata end point (max of index or path buffer end)
+    uint64_t metadata_end = sizeof(paf_header_t);
+    
+    if (header.file_count > 0) {
+        uint64_t index_end = header.index_offset + (uint64_t)header.file_count * sizeof(paf_index_entry_t);
+        
+        // We need to find the end of the path buffer
+        fseek(fin, header.index_offset + (header.file_count - 1) * sizeof(paf_index_entry_t), SEEK_SET);
+        paf_index_entry_t last_idx;
+        if (fread(&last_idx, sizeof(last_idx), 1, fin) == 1) {
+            uint64_t path_buffer_end = header.path_offset + last_idx.path_buffer_offset + last_idx.path_length;
+            metadata_end = (index_end > path_buffer_end) ? index_end : path_buffer_end;
+        }
+    }
+
+    // Prepare header for the new index-only file
+    header.flags |= PAF_FLAG_INDEX_ONLY;
+
+    FILE* fout = fopen(out_index_path, "wb");
+    if (!fout) {
+        fclose(fin);
+        return -1;
+    }
+
+    fwrite(&header, sizeof(header), 1, fout);
+
+    // Copy metadata block
+    uint64_t metadata_size = metadata_end - sizeof(paf_header_t);
+    if (metadata_size > 0) {
+        void* buffer = malloc((size_t)metadata_size);
+        if (buffer) {
+            fseek(fin, sizeof(paf_header_t), SEEK_SET);
+            fread(buffer, 1, (size_t)metadata_size, fin);
+            fwrite(buffer, 1, (size_t)metadata_size, fout);
+            free(buffer);
+        }
+    }
+
+    fclose(fin);
+    fclose(fout);
+    return 0;
+}
+
 // Frees the memory allocated by paf_list_binary
 void free_paf_list(PafList* list) {
     if (list->entries) {
