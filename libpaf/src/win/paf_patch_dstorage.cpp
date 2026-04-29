@@ -1,7 +1,8 @@
 #include "paf_patch.hpp"
-#include <iostream>
 
 #pragma comment(lib, "dstorage.lib")
+
+static const DWORD PATCH_WAIT_TIMEOUT_MS = 30000;
 
 namespace paf {
 
@@ -65,11 +66,20 @@ HRESULT PatchEngine::ApplyDeltaToBuffer(
         current_dst_offset += entry.data_size;
         request_count++;
 
-        // If queue capacity reached, submit and wait or use multiple queues
         if (request_count >= DSTORAGE_MAX_QUEUE_CAPACITY - 1) {
-            // In a production scenario, we'd handle batching here.
-            // For the prototype, we assume DSTORAGE_MAX_QUEUE_CAPACITY is enough 
-            // or we could implement a more complex pooling.
+            ComPtr<IDStorageStatusArray> midStatus;
+            m_factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&midStatus));
+            m_queue->EnqueueStatus(midStatus.Get(), 0);
+            m_queue->Submit();
+            DWORD elapsed = 0;
+            while (!midStatus->IsComplete(0)) {
+                if (elapsed >= PATCH_WAIT_TIMEOUT_MS) return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+                Sleep(1);
+                elapsed++;
+            }
+            HRESULT midHr = midStatus->GetHResult(0);
+            if (FAILED(midHr)) return midHr;
+            request_count = 0;
         }
     }
 
@@ -81,10 +91,11 @@ HRESULT PatchEngine::ApplyDeltaToBuffer(
     m_queue->EnqueueStatus(statusArray.Get(), 0);
     m_queue->Submit();
 
-    // In a real application, you would use an event or a poll thread.
-    // For the prototype, we block until complete.
+    DWORD elapsed = 0;
     while (!statusArray->IsComplete(0)) {
+        if (elapsed >= PATCH_WAIT_TIMEOUT_MS) return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
         Sleep(1);
+        elapsed++;
     }
 
     if (out_total_copied_size) *out_total_copied_size = current_dst_offset;

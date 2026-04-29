@@ -4,14 +4,26 @@
 #include <wrl/client.h>
 #include <vector>
 #include <stdint.h>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
+
+// Timeout for synchronous wait in milliseconds
+static const DWORD DSTORAGE_WAIT_TIMEOUT_MS = 5000;
 
 class PafDirectStorage {
 private:
     ComPtr<IDStorageFactory> m_factory;
     ComPtr<IDStorageQueue> m_queue;
     ComPtr<IDStorageFile> m_file;
+    std::wstring m_current_path;
+
+    HRESULT OpenFile(const wchar_t* path) {
+        m_file.Reset();
+        HRESULT hr = m_factory->OpenFile(path, IID_PPV_ARGS(&m_file));
+        if (SUCCEEDED(hr)) m_current_path = path;
+        return hr;
+    }
 
 public:
     HRESULT Initialize(const wchar_t* path) {
@@ -22,16 +34,22 @@ public:
         queueDesc.Capacity = DSTORAGE_MAX_QUEUE_CAPACITY;
         queueDesc.Priority = DSTORAGE_PRIORITY_NORMAL;
         queueDesc.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
-        queueDesc.Device = nullptr; // GPU Device would go here if using GPU destination
+        queueDesc.Device = nullptr;
 
         hr = m_factory->CreateQueue(&queueDesc, IID_PPV_ARGS(&m_queue));
         if (FAILED(hr)) return hr;
 
-        hr = m_factory->OpenFile(path, IID_PPV_ARGS(&m_file));
-        return hr;
+        return OpenFile(path);
     }
 
-    void EnqueueRequest(uint64_t offset, uint32_t size, void* destination) {
+    bool IsInitialized() const { return m_factory != nullptr; }
+
+    HRESULT EnsureFile(const wchar_t* path) {
+        if (m_current_path != path) return OpenFile(path);
+        return S_OK;
+    }
+
+    HRESULT EnqueueAndWait(uint64_t offset, uint32_t size, void* destination) {
         DSTORAGE_REQUEST request = {};
         request.Options.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
         request.Options.DestinationType = DSTORAGE_REQUEST_DESTINATION_MEMORY;
@@ -42,27 +60,34 @@ public:
         request.Destination.Memory.Size = size;
 
         m_queue->EnqueueRequest(&request);
-    }
 
-    HRESULT SubmitAndWait() {
-        ComPtr<ID3D12Fence> fence;
-        // In a full implementation, we'd use a shared fence from the D3D12 device
-        // For simplicity in this standalone IO, we'll use the DStorage status array
+        ComPtr<IDStorageStatusArray> statusArray;
+        HRESULT hr = m_factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&statusArray));
+        if (FAILED(hr)) return hr;
+
+        m_queue->EnqueueStatus(statusArray.Get(), 0);
         m_queue->Submit();
-        return S_OK;
+
+        DWORD elapsed = 0;
+        while (!statusArray->IsComplete(0)) {
+            if (elapsed >= DSTORAGE_WAIT_TIMEOUT_MS) return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+            Sleep(1);
+            elapsed++;
+        }
+
+        return statusArray->GetHResult(0);
     }
 };
 
 extern "C" int paf_io_directstorage_load(const wchar_t* path, uint64_t offset, uint64_t size, void* destination) {
     static PafDirectStorage ds;
-    static bool initialized = false;
-    
-    if (!initialized) {
+
+    if (!ds.IsInitialized()) {
         if (FAILED(ds.Initialize(path))) return -1;
-        initialized = true;
+    } else {
+        if (FAILED(ds.EnsureFile(path))) return -1;
     }
 
-    ds.EnqueueRequest(offset, (uint32_t)size, destination);
-    return 0;
+    return SUCCEEDED(ds.EnqueueAndWait(offset, (uint32_t)size, destination)) ? 0 : -1;
 }
 #endif

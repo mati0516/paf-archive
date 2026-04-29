@@ -71,7 +71,7 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
     }
 #endif
 
-    // Step 3: Cleanup and Process Index
+    // Step 3: Process Index
     for (uint32_t i = 0; i < gen->batch_count; i++) {
         paf_index_entry_t entry;
         memset(&entry, 0, sizeof(entry));
@@ -93,9 +93,6 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
         free(gen->batch_paths[i]);
     }
 
-#if defined(_WIN32) && defined(PAF_USE_CUDA)
-    cudaFree(d_data); cudaFree(d_hashes); cudaFree(d_offsets); cudaFree(d_sizes);
-#endif
     free(host_hashes);
     gen->batch_count = 0;
     gen->batch_buffer_pos = 0;
