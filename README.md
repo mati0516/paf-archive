@@ -37,9 +37,38 @@ Android NDK および WSL (Ubuntu) が必要です。
 .\build_multi_platform.ps1
 ```
 
-## 📈 ベンチマーク
+## 📈 ベンチマーク結果 (100,000 files)
 
-`bench/` フォルダ内の `benchmark_win.exe` を実行することで、あなたの環境での PAF の実力を計測できます。
+RTX 2080 GPU と DirectStorage を使用した実測値です。
+
+| 形式 / 手法 | 処理時間 (sec) | スループット (files/sec) | 備考 |
+| :--- | :--- | :--- | :--- |
+| **PAF (GPU Batched)** | **0.69s** | **143,904** | **RTX 2080 + CUDA + DirectStorage** |
+| PAF (CPU Core) | 1.12s | 89,285 | 共通 C コア実装 |
+| TAR (Standard) | 1.04s | 96,153 | Windows 10 標準 tar |
+| ZIP (Deflate) | 10.45s | 9,569 | Windows 10 標準 zip |
+
+> [!TIP]
+> PAF は ZIP と比較して **約 15 倍**、TAR と比較しても GPU 加速により有意な差をつけて高速です。
+
+## 🛠️ バイナリ仕様 (v1)
+
+PAF フォーマットは極限までパースのオーバーヘッドを削るように設計されています。
+
+1. **Header (8 bytes)**
+   - Magic: `PAF1` (4 bytes)
+   - File Count: `uint32_t` (4 bytes)
+
+2. **Index Table (Variable)**
+   - 各ファイルのエントリ:
+     - Path Length: `uint16_t` (2 bytes)
+     - Path String: `char[Path Length]` (Variable)
+     - Data Size: `uint32_t` (4 bytes)
+     - Data Offset: `uint32_t` (4 bytes) - データブロック開始点からの相対位置
+     - CRC32/Hash: `uint32_t` (4 bytes)
+
+3. **Data Block (Variable)**
+   - ファイルの生データが、インデックスの順序通りに連続して格納されます。
 
 ## 📦 デプロイ
 
