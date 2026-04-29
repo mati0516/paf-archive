@@ -22,11 +22,11 @@ Write-Host "--- Step 1: Compiling CUDA Kernels ---" -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { throw "nvcc failed" }
 
 Write-Host "--- Step 2: Compiling DirectStorage (C++) ---" -ForegroundColor Cyan
-& $cl /O2 /c /DLIBPAF_EXPORTS /Ilibpaf\include libpaf\src\win\paf_io_directstorage.cpp /Fo:paf_io_directstorage.obj
+& $cl /O2 /c /DLIBPAF_EXPORTS /Ilibpaf\include /Ilibpaf\src\win libpaf\src\win\paf_io_directstorage.cpp /Fo:paf_io_directstorage.obj
 if ($LASTEXITCODE -ne 0) { throw "cl failed (Step 2)" }
 
 Write-Host "--- Step 3: Building Final libpaf.dll ---" -ForegroundColor Cyan
-& $cl /O2 /LD /DLIBPAF_EXPORTS /DPAF_USE_CUDA /Ilibpaf\include `
+& $cl /O2 /LD /DLIBPAF_EXPORTS /DPAF_USE_CUDA /Ilibpaf\include /Ilibpaf\src\win `
     libpaf\src\*.c `
     paf_cuda_kernels.obj paf_io_directstorage.obj `
     cudart.lib dxgi.lib dxguid.lib dstorage.lib `

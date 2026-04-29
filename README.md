@@ -70,6 +70,14 @@ The PAF format is designed for minimal parsing overhead.
 3. **Data Block (Variable)**
    - Raw file data stored contiguously in the order of the index table.
 
+## 📦 Official Pre-built Binaries (GPU + DirectStorage)
+
+For Windows users who want the maximum performance without setting up the build environment, we provide a pre-built binary in the repository:
+
+- **Path**: `bin/windows-gpu/libpaf-gpu-directstorage-x64.dll`
+- **Features**: Includes **CUDA GPU acceleration** and **Microsoft DirectStorage v1.2.2**.
+- **Requirement**: NVIDIA GPU (RTX 20 series or newer recommended) and updated drivers.
+
 ## 📦 Deployment
 
 Pushing a tag (e.g., `v1.0.0`) to GitHub automatically triggers GitHub Actions to build binaries for all platforms and publish them to the [Releases](../../releases) page.
