@@ -176,6 +176,45 @@ int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t
     return 0;
 }
 
+int paf_generator_add_file_stream(paf_generator_t* gen, const char* path, FILE* fp, uint64_t size) {
+    if (!gen || !path || !fp) return -1;
+    if (strlen(path) >= 1024) return -1;
+
+    if (paf_generator_flush_batch(gen) != 0) return -1;
+
+    sha256_context_t ctx;
+    sha256_init(&ctx);
+    uint8_t chunk[65536];
+    uint64_t remaining = size;
+
+    while (remaining > 0) {
+        size_t to_read = (remaining > sizeof(chunk)) ? sizeof(chunk) : (size_t)remaining;
+        size_t n = fread(chunk, 1, to_read, fp);
+        if (n == 0) break;
+        sha256_update(&ctx, chunk, n);
+        if (!gen->index_only) {
+            if (fwrite(chunk, 1, n, gen->data_tmp) != n) return -1;
+        }
+        remaining -= n;
+    }
+
+    paf_index_entry_t entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.path_buffer_offset = gen->current_path_offset;
+    entry.path_length        = (uint32_t)strlen(path);
+    entry.data_size          = size;
+    entry.data_offset        = gen->current_data_offset;
+    sha256_final(&ctx, entry.hash);
+
+    if (!gen->index_only) gen->current_data_offset += size;
+
+    if (fwrite(path, 1, entry.path_length, gen->path_tmp) != entry.path_length) return -1;
+    if (fwrite(&entry, sizeof(entry), 1, gen->index_tmp) != 1) return -1;
+    gen->current_path_offset += entry.path_length;
+    gen->file_count++;
+    return 0;
+}
+
 static int copy_file_stream(FILE* src, FILE* dst) {
     char buffer[65536];
     size_t n;

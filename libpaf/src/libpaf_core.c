@@ -191,9 +191,12 @@ int paf_create_binary(const char* out_paf_path, const char** input_paths, int pa
         snprintf(fullpath, sizeof(fullpath), "%s/%s", input_paths[0], entries[i].path);
         FILE* fp = fopen(fullpath, "rb");
         if (!fp) { free(entries[i].path); continue; }
-        uint8_t* buf = (uint8_t*)malloc(entries[i].size);
-        if (buf && fread(buf, 1, entries[i].size, fp) == entries[i].size) {
+        uint8_t* buf = entries[i].size > 0 ? (uint8_t*)malloc(entries[i].size) : NULL;
+        if (buf && fread(buf, 1, entries[i].size, fp) == (size_t)entries[i].size) {
             paf_generator_add_file(&gen, entries[i].path, buf, entries[i].size);
+        } else {
+            rewind(fp);
+            paf_generator_add_file_stream(&gen, entries[i].path, fp, entries[i].size);
         }
         free(buf);
         fclose(fp);
@@ -237,9 +240,12 @@ int paf_create_index_only(const char* out_paf, const char** input_paths, int pat
         snprintf(fullpath, sizeof(fullpath), "%s/%s", input_paths[0], entries[i].path);
         FILE* fp = fopen(fullpath, "rb");
         if (!fp) { free(entries[i].path); continue; }
-        uint8_t* buf = (uint8_t*)malloc(entries[i].size);
-        if (buf && fread(buf, 1, entries[i].size, fp) == entries[i].size) {
+        uint8_t* buf = entries[i].size > 0 ? (uint8_t*)malloc(entries[i].size) : NULL;
+        if (buf && fread(buf, 1, entries[i].size, fp) == (size_t)entries[i].size) {
             paf_generator_add_file(&gen, entries[i].path, buf, entries[i].size);
+        } else {
+            rewind(fp);
+            paf_generator_add_file_stream(&gen, entries[i].path, fp, entries[i].size);
         }
         free(buf);
         fclose(fp);

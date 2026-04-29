@@ -41,6 +41,11 @@ PAF_API int paf_generator_init(paf_generator_t* gen);
  */
 PAF_API int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t* data, uint64_t size);
 
+// Streaming variant: reads from an open FILE* in chunks.
+// Falls back to CPU SHA-256 (no GPU batching). Used when the file is too large
+// to load into memory at once.
+PAF_API int paf_generator_add_file_stream(paf_generator_t* gen, const char* path, FILE* fp, uint64_t size);
+
 /**
  * Finalize the archive and write to output file.
  * Merges parts and cleans up temporary files.
