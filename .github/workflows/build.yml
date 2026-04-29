@@ -1,4 +1,4 @@
-name: Multi-Platform Build v1.0.4
+name: Simple Windows Build
 
 on:
   push:
@@ -11,34 +11,11 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-    - name: Build Windows DLL
+    - name: Compile
       run: |
-        cl /O2 /LD /Ilibpaf libpaf/libpaf_core.c libpaf/libpaf_extract.c libpaf/libpaf_list.c libpaf/paf_generator.c libpaf/paf_extractor.c libpaf/paf_gpu.c libpaf/sha256.c /Fe:libpaf.dll
-    - name: Upload Windows Artifact
+        gcc -O3 -shared -Ilibpaf libpaf/*.c -o libpaf.dll
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: libpaf-windows
-        path: |
-          libpaf.dll
-          libpaf.lib
-
-  build-linux-mac:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: |
-        gcc -O3 -shared -fPIC -Ilibpaf libpaf/libpaf_core.c libpaf/libpaf_extract.c libpaf/libpaf_list.c \
-        libpaf/paf_generator.c libpaf/paf_extractor.c libpaf/paf_gpu.c libpaf/sha256.c \
-        -o libpaf.${{ matrix.os == 'macos-latest' && 'dylib' || 'so' }}
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: libpaf-${{ matrix.os }}
-        path: libpaf.*
+        path: libpaf.dll
