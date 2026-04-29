@@ -40,15 +40,6 @@ static int paf_is_path_safe(const char* path) {
     return 1;
 }
 
-uint32_t crc32(const unsigned char* data, size_t length) {
-    uint32_t crc = 0xFFFFFFFF;
-    for (size_t i = 0; i < length; i++) {
-        crc ^= data[i];
-        for (int j = 0; j < 8; j++)
-            crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
-    }
-    return ~crc;
-}
 
 void ensure_directory(const char* full_path) {
     char path[1024];
@@ -149,24 +140,17 @@ static int collect_files_binary(const char* base_dir, const char* rel_path,
                                  recursive_ignore ? &local_rules : parent_rules,
                                  recursive_ignore);
         } else if (S_ISREG(st.st_mode)) {
-            FILE* fp = fopen(fullpath, "rb");
-            if (!fp) continue;
-            fseek(fp, 0, SEEK_END);
-            uint32_t size = (uint32_t)ftell(fp);
-            fseek(fp, 0, SEEK_SET);
-            unsigned char* buf = malloc(size);
-            (void)fread(buf, 1, size, fp);
-            fclose(fp);
-            uint32_t crc = crc32(buf, size);
-            free(buf);
-
             FileEntry fe;
             fe.path = strdup(child_rel);
-            fe.size = size;
+            fe.size = (uint32_t)st.st_size;
             fe.offset = 0;
-            fe.crc32 = crc;
+            fe.crc32 = 0;
 
-            *out_entries = realloc(*out_entries, sizeof(FileEntry) * (*out_count + 1));
+            if (*out_count % 64 == 0) {
+                FileEntry* tmp = realloc(*out_entries, sizeof(FileEntry) * (*out_count + 64));
+                if (!tmp) { free(fe.path); continue; }
+                *out_entries = tmp;
+            }
             (*out_entries)[(*out_count)++] = fe;
         }
     }

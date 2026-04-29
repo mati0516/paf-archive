@@ -114,11 +114,10 @@ int paf_extract_folder(const char* paf_path, const char* internal_dir, const cha
         if (!out) continue;
 
         char* buf = (char*)malloc((size_t)idx[i].data_size);
-        if (buf) {
-            (void)fread(buf, 1, (size_t)idx[i].data_size, fp);
+        if (!buf) { fclose(out); continue; }
+        if (fread(buf, 1, (size_t)idx[i].data_size, fp) == (size_t)idx[i].data_size)
             fwrite(buf, 1, (size_t)idx[i].data_size, out);
-            free(buf);
-        }
+        free(buf);
         fclose(out);
     }
 

@@ -33,8 +33,13 @@ int paf_delta_calculate(const char* old_paf_path, const char* new_paf_path, paf_
         return -1;
     }
 
-    uint32_t map_size = (new_list.count > 0) ? (new_list.count * 2) : 16;
+    uint32_t map_size = (new_list.count > 0) ? (new_list.count * 4) : 16;
     hash_node_t* map = (hash_node_t*)calloc(map_size, sizeof(hash_node_t));
+    if (!map) {
+        free_paf_list(&old_list);
+        free_paf_list(&new_list);
+        return -1;
+    }
     
     for (uint32_t i = 0; i < new_list.count; i++) {
         uint32_t h = hash_string(new_list.entries[i].path) % map_size;
@@ -45,6 +50,12 @@ int paf_delta_calculate(const char* old_paf_path, const char* new_paf_path, paf_
     }
 
     paf_delta_entry_t* results = (paf_delta_entry_t*)malloc(sizeof(paf_delta_entry_t) * (old_list.count + new_list.count));
+    if (!results) {
+        free(map);
+        free_paf_list(&old_list);
+        free_paf_list(&new_list);
+        return -1;
+    }
     uint32_t delta_count = 0;
 
     for (uint32_t i = 0; i < old_list.count; i++) {

@@ -43,10 +43,8 @@ int paf_extractor_open(paf_extractor_t* ext, const char* path) {
         return -1;
     }
 
-    // 3. Load Index Entries
-    // Security check: Limit max files to 1 billion (approx 64GB index) for GenAI datasets.
-    // Ensure the system has enough RAM to hold the index.
-    if (ext->header.file_count > 1000000000) {
+    if (ext->header.file_count > 1000000 ||
+        ext->header.file_count > (SIZE_MAX / sizeof(paf_index_entry_t))) {
         fclose(ext->fp);
         return -4;
     }
@@ -118,7 +116,6 @@ int paf_extractor_get_file(paf_extractor_t* ext, uint32_t index, char* out_path,
                     
                     if (memcmp(current_hash, entry->hash, 32) == 0) {
                         fclose(existing_fp);
-                        printf("[SmartExtract] Skipping %s (Identical hash)\n", out_path);
                         if (out_size) *out_size = entry->data_size;
                         *out_data = NULL; // Indicate skipped
                         return 0;

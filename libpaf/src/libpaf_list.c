@@ -16,12 +16,15 @@ int paf_list_binary(const char* paf_path, PafList* out_list) {
     }
 
     out_list->entries = (PafEntry*)malloc(sizeof(PafEntry) * header.file_count);
+    if (!out_list->entries) { fclose(fp); return -1; }
     out_list->count = header.file_count;
 
-    // 1. Read Index Table
     paf_index_entry_t* idx_table = (paf_index_entry_t*)malloc(sizeof(paf_index_entry_t) * header.file_count);
+    if (!idx_table) { free(out_list->entries); out_list->entries = NULL; fclose(fp); return -1; }
     fseek(fp, header.index_offset, SEEK_SET);
-    fread(idx_table, sizeof(paf_index_entry_t), header.file_count, fp);
+    if (fread(idx_table, sizeof(paf_index_entry_t), header.file_count, fp) != header.file_count) {
+        free(idx_table); free(out_list->entries); out_list->entries = NULL; fclose(fp); return -1;
+    }
 
     // 2. Read Path Buffer and fill PafEntry
     for (uint32_t i = 0; i < header.file_count; ++i) {

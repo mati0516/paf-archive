@@ -28,7 +28,8 @@ int paf_gpu_get_info(paf_gpu_info_t* info) {
             DXGI_ADAPTER_DESC desc;
             adapter->lpVtbl->GetDesc(adapter, &desc);
             info->total_vram = desc.DedicatedVideoMemory;
-            wcstombs(info->device_name, desc.Description, sizeof(info->device_name));
+            wcstombs(info->device_name, desc.Description, sizeof(info->device_name) - 1);
+            info->device_name[sizeof(info->device_name) - 1] = '\0';
             
             info->supports_vulkan = 1; 
             info->supports_direct_io = 1;
@@ -39,13 +40,13 @@ int paf_gpu_get_info(paf_gpu_info_t* info) {
         factory->lpVtbl->Release(factory);
     }
 #elif defined(_WIN32)
-    strcpy(info->device_name, "Windows Generic (CI Build)");
+    snprintf(info->device_name, sizeof(info->device_name), "Windows Generic (CI Build)");
     info->total_vram = 0;
 #elif defined(__ANDROID__) || defined(__APPLE__)
     // Mobile: Vulkan/Metal is the primary path
     info->supports_vulkan = 1;
-    info->supports_direct_io = 0; // Mobile usually uses mmap/standard IO
-    strcpy(info->device_name, "Mobile Integrated GPU");
+    info->supports_direct_io = 0;
+    snprintf(info->device_name, sizeof(info->device_name), "Mobile Integrated GPU");
 #else
     // Linux: Check for NVIDIA (CUDA) or AMD (Vulkan/ROCm)
     info->supports_vulkan = 1;
@@ -82,11 +83,6 @@ paf_batch_config_t paf_gpu_calculate_batch(uint64_t available_vram, uint32_t tot
 }
 
 int paf_gpu_direct_load(const char* path, uint64_t offset, uint64_t size, void* gpu_buffer) {
-    // This is a placeholder for DirectStorage implementation.
-    // In a real scenario, this would use IDStorageQueue::EnqueueRequest
-    printf("[DirectStorage] Loading %s (Offset: %llu, Size: %llu) -> GPU Buffer %p\n", 
-           path, (unsigned long long)offset, (unsigned long long)size, gpu_buffer);
-    
-    // Simulation: Just a normal read for now if we don't have DS ready
+    (void)path; (void)offset; (void)size; (void)gpu_buffer;
     return 0;
 }

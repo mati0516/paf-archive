@@ -1,24 +1,27 @@
 #include "fnmatch.h"
-#include <string.h>
+#include <stddef.h>
 
 int fnmatch(const char *pattern, const char *string, int flags) {
-    // Very basic wildcard matcher: supports '*' only
-    while (*pattern) {
+    (void)flags;
+    const char *star = NULL;
+    const char *ss = string;
+
+    while (*string) {
         if (*pattern == '*') {
-            pattern++;
+            star = ++pattern;
+            ss = string;
             if (!*pattern) return 0;
-            while (*string) {
-                if (fnmatch(pattern, string, flags) == 0)
-                    return 0;
-                string++;
-            }
-            return FNM_NOMATCH;
-        } else if (*pattern != *string) {
-            return FNM_NOMATCH;
-        } else {
+        } else if (*pattern == *string) {
             pattern++;
             string++;
+        } else if (star) {
+            pattern = star;
+            string = ++ss;
+        } else {
+            return FNM_NOMATCH;
         }
     }
-    return *string ? FNM_NOMATCH : 0;
+
+    while (*pattern == '*') pattern++;
+    return *pattern ? FNM_NOMATCH : 0;
 }

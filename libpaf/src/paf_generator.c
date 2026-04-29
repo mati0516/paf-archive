@@ -24,12 +24,13 @@ int paf_generator_init(paf_generator_t* gen) {
     gen->file_count = 0;
     gen->batch_count = 0;
     gen->batch_buffer_pos = 0;
-    gen->batch_data_buffer = (uint8_t*)malloc(128 * 1024 * 1024); // 128MB
+    gen->batch_data_buffer = (uint8_t*)malloc(128 * 1024 * 1024);
     gen->batch_sizes = (uint64_t*)malloc(sizeof(uint64_t) * 4096);
     gen->batch_offsets = (uint64_t*)malloc(sizeof(uint64_t) * 4096);
     gen->batch_paths = (char**)malloc(sizeof(char*) * 4096);
 
-    if (!gen->data_tmp || !gen->index_tmp || !gen->path_tmp) {
+    if (!gen->data_tmp || !gen->index_tmp || !gen->path_tmp ||
+        !gen->batch_data_buffer || !gen->batch_sizes || !gen->batch_offsets || !gen->batch_paths) {
         paf_generator_cleanup(gen);
         return -1;
     }
@@ -40,6 +41,7 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
     if (gen->batch_count == 0) return 0;
 
     uint8_t* host_hashes = (uint8_t*)malloc(gen->batch_count * 32);
+    if (!host_hashes) return -1;
     
 #if defined(_WIN32) && defined(PAF_USE_CUDA)
     // Step 1: Copy flattened buffer to GPU once
@@ -101,6 +103,7 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
 
 int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t* data, uint64_t size) {
     if (!gen || !path || !data) return -1;
+    if (strlen(path) >= 1024) return -1;
 
     // Safety: If this file is too large for the buffer, or the buffer is full
     if (gen->batch_buffer_pos + size > 128 * 1024 * 1024 || gen->batch_count >= 4096) {
@@ -161,6 +164,7 @@ int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t
     gen->batch_offsets[gen->batch_count] = gen->batch_buffer_pos;
     gen->batch_sizes[gen->batch_count] = size;
     gen->batch_paths[gen->batch_count] = _strdup(path);
+    if (!gen->batch_paths[gen->batch_count]) return -1;
     
     gen->batch_buffer_pos += size;
     gen->batch_count++;

@@ -111,8 +111,7 @@ extern "C" void paf_cuda_sha256_batch(const uint8_t* d_data, const uint64_t* d_o
 }
 
 extern "C" int paf_cuda_init() {
-    cudaFree(0); // Trigger initialization
-    return 0;
+    return (cudaFree(0) == cudaSuccess) ? 0 : -1;
 }
 
 extern "C" int paf_cuda_hash_batch(const uint8_t** host_data_ptrs, const uint64_t* host_sizes, uint32_t count, uint8_t* host_out_hashes) {
@@ -121,15 +120,16 @@ extern "C" int paf_cuda_hash_batch(const uint8_t** host_data_ptrs, const uint64_
     uint64_t total_data_size = 0;
     for (uint32_t i = 0; i < count; i++) total_data_size += host_sizes[i];
 
-    uint8_t *d_data, *d_hashes;
-    uint64_t *d_offsets, *d_sizes;
-    
-    cudaMalloc(&d_data, total_data_size);
-    cudaMalloc(&d_hashes, count * 32);
-    cudaMalloc(&d_offsets, count * sizeof(uint64_t));
-    cudaMalloc(&d_sizes, count * sizeof(uint64_t));
+    uint8_t *d_data = NULL, *d_hashes = NULL;
+    uint64_t *d_offsets = NULL, *d_sizes = NULL;
+
+    if (cudaMalloc(&d_data, total_data_size) != cudaSuccess) return -1;
+    if (cudaMalloc(&d_hashes, count * 32) != cudaSuccess) { cudaFree(d_data); return -1; }
+    if (cudaMalloc(&d_offsets, count * sizeof(uint64_t)) != cudaSuccess) { cudaFree(d_data); cudaFree(d_hashes); return -1; }
+    if (cudaMalloc(&d_sizes, count * sizeof(uint64_t)) != cudaSuccess) { cudaFree(d_data); cudaFree(d_hashes); cudaFree(d_offsets); return -1; }
 
     uint64_t* host_offsets = (uint64_t*)malloc(count * sizeof(uint64_t));
+    if (!host_offsets) { cudaFree(d_data); cudaFree(d_hashes); cudaFree(d_offsets); cudaFree(d_sizes); return -1; }
     uint64_t current_offset = 0;
     for (uint32_t i = 0; i < count; i++) {
         host_offsets[i] = current_offset;
