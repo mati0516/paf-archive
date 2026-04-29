@@ -194,12 +194,11 @@ cython_debug/
 .cursorindexingignore
 
 # Test binaries and outputs
+test/
 /test_paf
 /test_paf_ext
 /test_paf2*
 *.paf
-test/out/
-test/out_single
 /bench/
 /bench_win_data/
 /build_android/

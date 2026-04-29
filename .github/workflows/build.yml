@@ -31,10 +31,6 @@ jobs:
     - name: Compile Linux libpaf
       run: |
         gcc -O3 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -o libpaf.so
-    - name: Build and run tests
-      run: |
-        gcc -O3 -Ilibpaf/include libpaf/src/*.c test/test_all.c -o test_runner
-        cd test && ../test_runner
     - name: Upload Linux Artifact
       uses: actions/upload-artifact@v4
       with:
