@@ -1,4 +1,4 @@
-name: Simple Windows Build
+name: Windows Build via MSYS2
 
 on:
   push:
@@ -11,7 +11,13 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        install: >-
+          mingw-w64-x86_64-gcc
     - name: Compile
+      shell: msys2 {0}
       run: |
         gcc -O3 -shared -Ilibpaf libpaf/*.c -o libpaf.dll
     - name: Upload
