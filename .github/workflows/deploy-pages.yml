@@ -32,12 +32,10 @@ jobs:
       - name: Build WASM
         run: |
           emcc \
-            libpaf/libpaf_core.c \
-            libpaf/libpaf_list.c \
-            libpaf/libpaf_extract.c \
-            libpaf/libpaf_exists.c \
-            libpaf/fnmatch.c \
+            libpaf/src/*.c \
             wasm/paf_wasm.c \
+            -Ilibpaf/include \
+            -DLIBPAF_EXPORTS \
             -O3 \
             -s WASM=1 \
             -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToNewUTF8','FS']" \
