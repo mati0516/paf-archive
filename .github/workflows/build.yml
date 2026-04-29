@@ -15,28 +15,12 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Build Environment
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y build-essential g++
+    - uses: actions/checkout@v4
     - name: Build
       run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          # Compile C files
-          for f in libpaf/*.c; do gcc -O3 -fPIC -Ilibpaf -c $f -o ${f%.c}.o; done
-          # Compile C++ files
-          for f in libpaf/*.cpp; do g++ -O3 -fPIC -Ilibpaf -c $f -o ${f%.cpp}.o; done
-          # Link
-          g++ -shared libpaf/*.o -o libpaf.dll -ldxgi -lsetupapi
-        elif [ "$RUNNER_OS" == "Linux" ]; then
-          for f in libpaf/*.c; do gcc -O3 -fPIC -Ilibpaf -c $f -o ${f%.c}.o; done
-          for f in libpaf/*.cpp; do g++ -O3 -fPIC -Ilibpaf -c $f -o ${f%.cpp}.o; done
-          g++ -shared -fPIC libpaf/*.o -o libpaf.so
-        else
-          for f in libpaf/*.c; do gcc -O3 -fPIC -Ilibpaf -c $f -o ${f%.c}.o; done
-          for f in libpaf/*.cpp; do g++ -O3 -fPIC -Ilibpaf -c $f -o ${f%.cpp}.o; done
-          g++ -shared libpaf/*.o -o libpaf.dylib
-        fi
+        gcc -O3 -shared -fPIC -Ilibpaf libpaf/libpaf_core.c libpaf/libpaf_extract.c libpaf/libpaf_list.c \
+        libpaf/paf_generator.c libpaf/paf_extractor.c libpaf/paf_gpu.c libpaf/sha256.c \
+        -o libpaf.${{ matrix.os == 'windows-latest' && 'dll' || (matrix.os == 'macos-latest' && 'dylib' || 'so') }}
       shell: bash
     - name: Test Build (Security)
       run: |
@@ -54,14 +38,14 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Setup Android NDK
-      uses: nwtgck/setup-ndk@v1
+      uses: nwtgck/actions-setup-ndk@v1
       with:
         ndk-version: r25c
     - name: Build for Android (arm64-v8a)
       run: |
-        # Use clang++ for linking C and C++ objects
-        $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++ \
-        -O3 -shared -fPIC -Ilibpaf libpaf/*.c libpaf/*.cpp -o libpaf_android_arm64.so
+        $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang \
+        -O3 -shared -fPIC -Ilibpaf libpaf/libpaf_core.c libpaf/libpaf_extract.c libpaf/libpaf_list.c \
+        libpaf/paf_generator.c libpaf/paf_extractor.c libpaf/paf_gpu.c libpaf/sha256.c -o libpaf_android_arm64.so
     - name: Upload Android Artifact
       uses: actions/upload-artifact@v4
       with:
