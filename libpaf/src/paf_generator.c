@@ -1,13 +1,11 @@
 #define LIBPAF_EXPORTS
 #include "paf_generator.h"
+#include "paf_gpu_loader.h"
 #include "sha256.h"
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32) && defined(PAF_USE_CUDA)
-#include <cuda_runtime.h>
-#include "paf_cuda.h"
-#elif defined(_WIN32)
+#if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -44,35 +42,18 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
     uint8_t* host_hashes = (uint8_t*)malloc(gen->batch_count * 32);
     if (!host_hashes) return -1;
     
-#if defined(_WIN32) && defined(PAF_USE_CUDA)
-    // Step 1: Copy flattened buffer to GPU once
-    uint8_t *d_data, *d_hashes;
-    uint64_t *d_offsets, *d_sizes;
-    
-    cudaMalloc(&d_data, gen->batch_buffer_pos);
-    cudaMalloc(&d_hashes, gen->batch_count * 32);
-    cudaMalloc(&d_offsets, gen->batch_count * sizeof(uint64_t));
-    cudaMalloc(&d_sizes, gen->batch_count * sizeof(uint64_t));
-
-    cudaMemcpy(d_data, gen->batch_data_buffer, gen->batch_buffer_pos, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_offsets, gen->batch_offsets, gen->batch_count * sizeof(uint64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_sizes, gen->batch_sizes, gen->batch_count * sizeof(uint64_t), cudaMemcpyHostToDevice);
-
-    // Step 2: GPU Parallel Hashing
-    paf_cuda_sha256_batch(d_data, d_offsets, d_sizes, d_hashes, gen->batch_count);
-    cudaDeviceSynchronize();
-
-    cudaMemcpy(host_hashes, d_hashes, gen->batch_count * 32, cudaMemcpyDeviceToHost);
-    cudaFree(d_data); cudaFree(d_hashes); cudaFree(d_offsets); cudaFree(d_sizes);
-#else
-    // CPU Fallback for Linux/Android/Windows-without-CUDA
-    for (uint32_t i = 0; i < gen->batch_count; i++) {
-        sha256_context_t sha_ctx;
-        sha256_init(&sha_ctx);
-        sha256_update(&sha_ctx, gen->batch_data_buffer + gen->batch_offsets[i], (size_t)gen->batch_sizes[i]);
-        sha256_final(&sha_ctx, host_hashes + (i * 32));
+    // GPU path if paf_cuda.dll is loaded; CPU fallback otherwise
+    int gpu_done = paf_cuda_is_available() && g_paf_cuda_hash_flat != NULL &&
+                   g_paf_cuda_hash_flat(gen->batch_data_buffer, gen->batch_offsets,
+                                        gen->batch_sizes, gen->batch_count, host_hashes) == 0;
+    if (!gpu_done) {
+        for (uint32_t i = 0; i < gen->batch_count; i++) {
+            sha256_context_t sha_ctx;
+            sha256_init(&sha_ctx);
+            sha256_update(&sha_ctx, gen->batch_data_buffer + gen->batch_offsets[i], (size_t)gen->batch_sizes[i]);
+            sha256_final(&sha_ctx, host_hashes + (i * 32));
+        }
     }
-#endif
 
     // Step 3: Process Index
     for (uint32_t i = 0; i < gen->batch_count; i++) {
@@ -120,32 +101,17 @@ int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t
             entry.path_length = (uint32_t)strlen(path);
             entry.data_size = size;
 
-#if defined(_WIN32) && defined(PAF_USE_CUDA)
-            // Single GPU hashing
-            uint8_t* d_data, *d_hash;
-            uint64_t* d_offset, *d_size;
-            uint64_t offset_val = 0;
-            cudaMalloc(&d_data, size);
-            cudaMalloc(&d_hash, 32);
-            cudaMalloc(&d_offset, sizeof(uint64_t));
-            cudaMalloc(&d_size, sizeof(uint64_t));
-            
-            cudaMemcpy(d_data, data, size, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_offset, &offset_val, sizeof(uint64_t), cudaMemcpyHostToDevice);
-            cudaMemcpy(d_size, &size, sizeof(uint64_t), cudaMemcpyHostToDevice);
-            
-            paf_cuda_sha256_batch(d_data, d_offset, d_size, d_hash, 1);
-            cudaDeviceSynchronize();
-            cudaMemcpy(entry.hash, d_hash, 32, cudaMemcpyDeviceToHost);
-            
-            cudaFree(d_data); cudaFree(d_hash); cudaFree(d_offset); cudaFree(d_size);
-#else
-            // CPU fallback
-            sha256_context_t sha_ctx;
-            sha256_init(&sha_ctx);
-            sha256_update(&sha_ctx, data, (size_t)size);
-            sha256_final(&sha_ctx, entry.hash);
-#endif
+            {
+                uint64_t offset_val = 0;
+                int gpu_done = paf_cuda_is_available() && g_paf_cuda_hash_flat != NULL &&
+                               g_paf_cuda_hash_flat(data, &offset_val, &size, 1, entry.hash) == 0;
+                if (!gpu_done) {
+                    sha256_context_t sha_ctx;
+                    sha256_init(&sha_ctx);
+                    sha256_update(&sha_ctx, data, (size_t)size);
+                    sha256_final(&sha_ctx, entry.hash);
+                }
+            }
             
             entry.data_offset = gen->current_data_offset;
             if (!gen->index_only) {

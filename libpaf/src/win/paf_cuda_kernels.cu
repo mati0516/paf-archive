@@ -114,6 +114,43 @@ extern "C" int paf_cuda_init() {
     return (cudaFree(0) == cudaSuccess) ? 0 : -1;
 }
 
+// Host-to-host batch hash using a flat contiguous buffer.
+// host_buf   : flat buffer containing all file data
+// offsets    : byte offset of each file within host_buf
+// sizes      : byte size of each file
+// count      : number of files
+// out_hashes : output, count*32 bytes (SHA-256 per file)
+extern "C" int paf_cuda_hash_flat(const uint8_t* host_buf, const uint64_t* host_offsets,
+                                   const uint64_t* host_sizes, uint32_t count,
+                                   uint8_t* host_out_hashes) {
+    if (count == 0) return 0;
+
+    uint64_t buf_size = host_offsets[count - 1] + host_sizes[count - 1];
+
+    uint8_t  *d_data = NULL, *d_hashes = NULL;
+    uint64_t *d_offsets = NULL, *d_sizes = NULL;
+
+    if (cudaMalloc(&d_data,    buf_size)                 != cudaSuccess) return -1;
+    if (cudaMalloc(&d_hashes,  count * 32)               != cudaSuccess) { cudaFree(d_data); return -1; }
+    if (cudaMalloc(&d_offsets, count * sizeof(uint64_t)) != cudaSuccess) { cudaFree(d_data); cudaFree(d_hashes); return -1; }
+    if (cudaMalloc(&d_sizes,   count * sizeof(uint64_t)) != cudaSuccess) { cudaFree(d_data); cudaFree(d_hashes); cudaFree(d_offsets); return -1; }
+
+    cudaMemcpy(d_data,    host_buf,        buf_size,                 cudaMemcpyHostToDevice);
+    cudaMemcpy(d_offsets, host_offsets,    count * sizeof(uint64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_sizes,   host_sizes,      count * sizeof(uint64_t), cudaMemcpyHostToDevice);
+
+    paf_cuda_sha256_batch(d_data, d_offsets, d_sizes, d_hashes, count);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(host_out_hashes, d_hashes, count * 32, cudaMemcpyDeviceToHost);
+
+    cudaFree(d_data);
+    cudaFree(d_hashes);
+    cudaFree(d_offsets);
+    cudaFree(d_sizes);
+    return 0;
+}
+
 extern "C" int paf_cuda_hash_batch(const uint8_t** host_data_ptrs, const uint64_t* host_sizes, uint32_t count, uint8_t* host_out_hashes) {
     if (count == 0) return 0;
 
