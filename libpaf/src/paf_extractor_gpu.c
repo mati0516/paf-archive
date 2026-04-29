@@ -1,12 +1,15 @@
 #include "paf_extractor.h"
 #include "paf_gpu.h"
+#if defined(_WIN32) && defined(PAF_USE_CUDA)
 #include "paf_cuda.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-// External DirectStorage wrapper
+// External DirectStorage wrapper (only on Windows)
 #ifdef _WIN32
-extern "C" int paf_io_directstorage_load(const wchar_t* path, uint64_t offset, uint64_t size, void* destination);
+int paf_io_directstorage_load(const wchar_t* path, uint64_t offset, uint64_t size, void* destination);
 #else
 static int paf_io_directstorage_load(const void* path, uint64_t offset, uint64_t size, void* destination) {
     (void)path; (void)offset; (void)size; (void)destination;

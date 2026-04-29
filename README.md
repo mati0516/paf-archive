@@ -1,78 +1,78 @@
 # Parallel Archive Format (PAF)
 
-PAF は、**GPU 加速** と **Microsoft DirectStorage** をフル活用した、次世代の超高速非圧縮アーカイブフォーマットです。
-既存の ZIP や TAR を圧倒するスループットを実現し、大量のファイルを瞬時にパッケージングすることに特化しています。
+PAF is a next-generation, high-performance, non-compressed archive format that fully leverages **GPU acceleration** and **Microsoft DirectStorage**.
+It is designed to eliminate I/O bottlenecks and provide massive throughput for packaging and extracting large numbers of files.
 
-## 🚀 主な特徴
+## 🚀 Key Features
 
-- **GPU 加速ハッシュ計算**: NVIDIA CUDA を使用し、SHA-256 ハッシュを数万ファイル単位で並列計算。
-- **Microsoft DirectStorage v1.2.2**: Windows 環境において、NVMe ストレージから直接 GPU/メモリへデータを転送し、I/O ボトルネックを解消。
-- **圧倒的なパフォーマンス**: 10万ファイル超のアーカイブ作成において **140,000 files/sec** 以上のスループットを達成。
-- **マルチプラットフォーム**: 
-  - **Windows**: GPU 加速 & DirectStorage フル対応
-  - **Linux (WSL)**: 高速 C コアによる安定動作
-  - **Android (ARM64)**: モバイル環境での高速アーカイブ
-- **ゼロコピー・アーキテクチャ**: 内部バッファの最適化により、メモリコピーを最小限に抑制。
+- **GPU-Accelerated Hashing**: Parallel SHA-256 calculation for tens of thousands of files using NVIDIA CUDA.
+- **Microsoft DirectStorage v1.2.2**: Direct NVMe-to-GPU/Memory data paths on Windows, bypassing CPU bottlenecks.
+- **Extreme Performance**: Achieved over **140,000 files/sec** throughput for 100k+ file archives.
+- **Multi-Platform Support**:
+  - **Windows**: Full support for GPU acceleration & DirectStorage.
+  - **Linux (WSL)**: High-performance C core for server environments.
+  - **Android (ARM64)**: Optimized for mobile high-speed archiving.
+- **Zero-Copy Architecture**: Minimized memory copying via optimized internal flat buffers.
 
-## 📁 プロジェクト構造
+## 📁 Directory Structure
 
-- `libpaf/include`: 公開ヘッダーファイル
-- `libpaf/src`: 共通コアロジック (C)
-- `libpaf/src/win`: Windows 固有の高速化コード (CUDA, DirectStorage)
-- `test`: ベンチマークおよびテスト用ソース
-- `bench`: ベンチマーク結果および実行データ (Git 除外対象)
-- `.github/workflows`: 自動ビルド & リリース環境 (Windows, Linux, Android)
+- `libpaf/include`: Public header files.
+- `libpaf/src`: Common core logic (C).
+- `libpaf/src/win`: Windows-specific acceleration (CUDA, DirectStorage).
+- `test`: Benchmark and test source code.
+- `bench`: Benchmark results and execution data (Git-ignored).
+- `.github/workflows`: Automated build & release pipeline (Windows, Linux, Android).
 
-## 🛠️ ビルド方法
+## 🛠️ Build Instructions
 
-### Windows (GPU 加速版)
-CUDA Toolkit 13.2+ と Visual Studio が必要です。
+### Windows (GPU-Accelerated)
+Requires CUDA Toolkit 13.2+ and Visual Studio (MSVC).
 ```powershell
 .\build_paf_gpu.ps1
 ```
 
-### マルチプラットフォーム (Android / Linux)
-Android NDK および WSL (Ubuntu) が必要です。
+### Multi-Platform (Android / Linux)
+Requires Android NDK and WSL (Ubuntu).
 ```powershell
 .\build_multi_platform.ps1
 ```
 
-## 📈 ベンチマーク結果 (100,000 files)
+## 📈 Benchmark Results (100,000 files)
 
-RTX 2080 GPU と DirectStorage を使用した実測値です。
+Measured on an RTX 2080 GPU with DirectStorage enabled.
 
-| 形式 / 手法 | 処理時間 (sec) | スループット (files/sec) | 備考 |
+| Format / Method | Time (sec) | Throughput (files/sec) | Notes |
 | :--- | :--- | :--- | :--- |
 | **PAF (GPU Batched)** | **0.69s** | **143,904** | **RTX 2080 + CUDA + DirectStorage** |
-| PAF (CPU Core) | 1.12s | 89,285 | 共通 C コア実装 |
-| TAR (Standard) | 1.04s | 96,153 | Windows 10 標準 tar |
-| ZIP (Deflate) | 10.45s | 9,569 | Windows 10 標準 zip |
+| PAF (CPU Core) | 1.12s | 89,285 | Common C Core implementation |
+| TAR (Standard) | 1.04s | 96,153 | Windows 10 standard tar |
+| ZIP (Deflate) | 10.45s | 9,569 | Windows 10 standard zip |
 
 > [!TIP]
-> PAF は ZIP と比較して **約 15 倍**、TAR と比較しても GPU 加速により有意な差をつけて高速です。
+> PAF is approximately **15x faster** than ZIP and significantly faster than TAR when GPU acceleration is utilized.
 
-## 🛠️ バイナリ仕様 (v1)
+## 🛠️ Binary Specification (v1)
 
-PAF フォーマットは極限までパースのオーバーヘッドを削るように設計されています。
+The PAF format is designed for minimal parsing overhead.
 
 1. **Header (8 bytes)**
    - Magic: `PAF1` (4 bytes)
    - File Count: `uint32_t` (4 bytes)
 
 2. **Index Table (Variable)**
-   - 各ファイルのエントリ:
+   - Per-file entry:
      - Path Length: `uint16_t` (2 bytes)
      - Path String: `char[Path Length]` (Variable)
      - Data Size: `uint32_t` (4 bytes)
-     - Data Offset: `uint32_t` (4 bytes) - データブロック開始点からの相対位置
+     - Data Offset: `uint32_t` (4 bytes) - Relative to the start of the data block
      - CRC32/Hash: `uint32_t` (4 bytes)
 
 3. **Data Block (Variable)**
-   - ファイルの生データが、インデックスの順序通りに連続して格納されます。
+   - Raw file data stored contiguously in the order of the index table.
 
-## 📦 デプロイ
+## 📦 Deployment
 
-GitHub にタグ（例：`v1.0.0`）を Push すると、GitHub Actions が自動的に各プラットフォーム向けのライブラリをビルドし、[Releases](../../releases) ページに公開します。
+Pushing a tag (e.g., `v1.0.0`) to GitHub automatically triggers GitHub Actions to build binaries for all platforms and publish them to the [Releases](../../releases) page.
 
 ---
 Developed by Antigravity AI & Team.
