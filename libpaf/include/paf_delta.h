@@ -2,6 +2,7 @@
 #define PAF_DELTA_H
 
 #include "paf.h"
+#include "libpaf.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +55,21 @@ PAF_API void paf_delta_free(paf_delta_t* delta);
  * 差分をオフセット順にソートしてI/O効率を最適化する
  */
 PAF_API void paf_delta_optimize_io(paf_delta_t* delta);
+
+/**
+ * 差分をディスクに適用する
+ *
+ * - ADDED/UPDATED: new_paf から dst_dir 以下に展開
+ * - DELETED:       dst_dir 以下の該当ファイルを削除
+ *
+ * @param new_paf_path 新バージョンのPAFパス
+ * @param delta        paf_delta_calculate の結果
+ * @param dst_dir      適用先ディレ��トリ
+ * @param progress     進捗コールバック（不要なら NULL）
+ * @param user_data    コールバックに渡すユーザーデータ
+ * @return 0: 成功, その他: 失敗
+ */
+PAF_API int paf_patch_apply(const char* new_paf_path, const paf_delta_t* delta, const char* dst_dir, paf_progress_fn progress, void* user_data);
 
 #ifdef __cplusplus
 }

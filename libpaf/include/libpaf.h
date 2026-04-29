@@ -25,6 +25,10 @@ typedef struct {
     uint32_t count;        // Number of files
 } PafList;
 
+// Progress callback: called after each file during long operations
+// done/total = file counts, path = current file path, user_data = caller context
+typedef void (*paf_progress_fn)(uint32_t done, uint32_t total, const char* path, void* user_data);
+
 // Create a .paf archive from specified files or folders
 PAF_API int paf_create_binary(const char* out_paf_path, const char** input_paths, int path_count, const char* ignore_file_path, int recursive_ignore);
 
