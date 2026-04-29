@@ -32,6 +32,10 @@ typedef void (*paf_progress_fn)(uint32_t done, uint32_t total, const char* path,
 // Create a .paf archive from specified files or folders
 PAF_API int paf_create_binary(const char* out_paf_path, const char** input_paths, int path_count, const char* ignore_file_path, int recursive_ignore);
 
+// Create an index-only .paf (header + index + path buffer, no data blocks).
+// Much faster for large directories; suitable as input to paf_delta_calculate.
+PAF_API int paf_create_index_only(const char* out_paf, const char** input_paths, int path_count, const char* filter);
+
 // Extract all contents of a .paf archive into a directory
 PAF_API int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite);
 

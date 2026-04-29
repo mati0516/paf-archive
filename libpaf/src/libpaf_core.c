@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include "fnmatch.h"
+#include "sha256.h"
 
 #if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
 #include "dirent_win.h"
@@ -204,6 +205,75 @@ int paf_create_binary(const char* out_paf_path, const char** input_paths, int pa
     int result = paf_generator_finalize(&gen, out_paf_path);
     paf_generator_cleanup(&gen);
     return result;
+}
+
+int paf_create_index_only(const char* out_paf, const char** input_paths, int path_count,
+                           const char* filter) {
+    (void)filter;
+
+    FileEntry* entries = NULL;
+    int count = 0;
+    IgnoreRuleList root_rules = {0};
+
+    if (path_count > 0) {
+        char default_path[1024];
+        snprintf(default_path, sizeof(default_path), "%s/.pafignore", input_paths[0]);
+        load_ignore_file(default_path, &root_rules);
+    }
+    for (int i = 0; i < path_count; i++) {
+        collect_files_binary(input_paths[i], "", &entries, &count, &root_rules, 1);
+    }
+    free_ignore_list(&root_rules);
+
+    FILE* fp = fopen(out_paf, "wb");
+    if (!fp) {
+        for (int i = 0; i < count; i++) free(entries[i].path);
+        free(entries);
+        return -1;
+    }
+
+    paf_header_t header;
+    memcpy(header.magic, PAF_MAGIC, 4);
+    header.version = PAF_VERSION;
+    header.flags   = PAF_FLAG_INDEX_ONLY;
+    header.file_count   = (uint32_t)count;
+    header.index_offset = sizeof(paf_header_t);
+    header.path_offset  = sizeof(paf_header_t) + (uint64_t)count * sizeof(paf_index_entry_t);
+    fwrite(&header, sizeof(header), 1, fp);
+
+    uint64_t path_offset_accum = 0;
+    for (int i = 0; i < count; i++) {
+        paf_index_entry_t idx;
+        memset(&idx, 0, sizeof(idx));
+        idx.path_buffer_offset = path_offset_accum;
+        idx.path_length        = (uint32_t)strlen(entries[i].path);
+        idx.data_size          = entries[i].size;
+
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", input_paths[0], entries[i].path);
+        FILE* fin = fopen(fullpath, "rb");
+        if (fin) {
+            sha256_context_t ctx;
+            sha256_init(&ctx);
+            uint8_t chunk[65536];
+            size_t n;
+            while ((n = fread(chunk, 1, sizeof(chunk), fin)) > 0)
+                sha256_update(&ctx, chunk, n);
+            sha256_final(&ctx, idx.hash);
+            fclose(fin);
+        }
+
+        fwrite(&idx, sizeof(idx), 1, fp);
+        path_offset_accum += (uint64_t)strlen(entries[i].path);
+    }
+
+    for (int i = 0; i < count; i++) {
+        fwrite(entries[i].path, 1, strlen(entries[i].path), fp);
+        free(entries[i].path);
+    }
+    free(entries);
+    fclose(fp);
+    return 0;
 }
 
 int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite) {

@@ -71,6 +71,9 @@ PAF_API void paf_delta_optimize_io(paf_delta_t* delta);
  */
 PAF_API int paf_patch_apply(const char* new_paf_path, const paf_delta_t* delta, const char* dst_dir, paf_progress_fn progress, void* user_data);
 
+// Apply delta by copying files directly from a source directory (no PAF required).
+PAF_API int paf_patch_apply_from_dir(const char* new_src_dir, const paf_delta_t* delta, const char* dst_dir, paf_progress_fn progress, void* user_data);
+
 #ifdef __cplusplus
 }
 #endif
