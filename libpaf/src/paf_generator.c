@@ -24,6 +24,7 @@ int paf_generator_init(paf_generator_t* gen) {
     gen->file_count = 0;
     gen->batch_count = 0;
     gen->batch_buffer_pos = 0;
+    gen->index_only = 0;
     gen->batch_data_buffer = (uint8_t*)malloc(128 * 1024 * 1024);
     gen->batch_sizes = (uint64_t*)malloc(sizeof(uint64_t) * 4096);
     gen->batch_offsets = (uint64_t*)malloc(sizeof(uint64_t) * 4096);
@@ -83,9 +84,10 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
         memcpy(entry.hash, host_hashes + (i * 32), 32);
 
         entry.data_offset = gen->current_data_offset;
-        // Write data from our pre-allocated buffer
-        if (fwrite(gen->batch_data_buffer + gen->batch_offsets[i], 1, (size_t)gen->batch_sizes[i], gen->data_tmp) != (size_t)gen->batch_sizes[i]) return -1;
-        gen->current_data_offset += gen->batch_sizes[i];
+        if (!gen->index_only) {
+            if (fwrite(gen->batch_data_buffer + gen->batch_offsets[i], 1, (size_t)gen->batch_sizes[i], gen->data_tmp) != (size_t)gen->batch_sizes[i]) return -1;
+            gen->current_data_offset += gen->batch_sizes[i];
+        }
 
         if (fwrite(gen->batch_paths[i], 1, entry.path_length, gen->path_tmp) != entry.path_length) return -1;
         if (fwrite(&entry, sizeof(entry), 1, gen->index_tmp) != 1) return -1;
@@ -146,8 +148,10 @@ int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t
 #endif
             
             entry.data_offset = gen->current_data_offset;
-            fwrite(data, 1, (size_t)size, gen->data_tmp);
-            gen->current_data_offset += size;
+            if (!gen->index_only) {
+                fwrite(data, 1, (size_t)size, gen->data_tmp);
+                gen->current_data_offset += size;
+            }
             
             fwrite(path, 1, entry.path_length, gen->path_tmp);
             fwrite(&entry, sizeof(entry), 1, gen->index_tmp);
@@ -196,20 +200,26 @@ int paf_generator_finalize(paf_generator_t* gen, const char* output_path) {
     memcpy(header.magic, PAF_MAGIC, 4);
     header.version = PAF_VERSION;
     header.file_count = gen->file_count;
-    
+
     uint64_t header_size = sizeof(paf_header_t);
-    uint64_t data_size = gen->current_data_offset;
     uint64_t index_size = (uint64_t)gen->file_count * sizeof(paf_index_entry_t);
-    
-    header.index_offset = header_size + data_size;
-    header.path_offset = header.index_offset + index_size;
+
+    if (gen->index_only) {
+        header.flags = PAF_FLAG_INDEX_ONLY;
+        header.index_offset = header_size;
+        header.path_offset  = header_size + index_size;
+    } else {
+        uint64_t data_size = gen->current_data_offset;
+        header.index_offset = header_size + data_size;
+        header.path_offset  = header.index_offset + index_size;
+    }
 
     if (fwrite(&header, sizeof(header), 1, out) != 1) {
         fclose(out);
         return -1;
     }
 
-    if (copy_file_stream(gen->data_tmp, out) != 0) {
+    if (!gen->index_only && copy_file_stream(gen->data_tmp, out) != 0) {
         fclose(out);
         return -1;
     }

@@ -23,6 +23,7 @@ typedef struct {
     char** batch_paths;
     uint32_t batch_count;
     uint64_t batch_buffer_pos;
+    int index_only; // 1 = skip data block output (for paf_create_index_only)
 } paf_generator_t;
 
 /**

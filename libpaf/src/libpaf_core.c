@@ -6,7 +6,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include "fnmatch.h"
-#include "sha256.h"
 
 #if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
 #include "dirent_win.h"
@@ -225,55 +224,32 @@ int paf_create_index_only(const char* out_paf, const char** input_paths, int pat
     }
     free_ignore_list(&root_rules);
 
-    FILE* fp = fopen(out_paf, "wb");
-    if (!fp) {
+    paf_generator_t gen;
+    if (paf_generator_init(&gen) != 0) {
         for (int i = 0; i < count; i++) free(entries[i].path);
         free(entries);
         return -1;
     }
+    gen.index_only = 1; // CUDA/CPU batch SHA-256, no data block written
 
-    paf_header_t header;
-    memcpy(header.magic, PAF_MAGIC, 4);
-    header.version = PAF_VERSION;
-    header.flags   = PAF_FLAG_INDEX_ONLY;
-    header.file_count   = (uint32_t)count;
-    header.index_offset = sizeof(paf_header_t);
-    header.path_offset  = sizeof(paf_header_t) + (uint64_t)count * sizeof(paf_index_entry_t);
-    fwrite(&header, sizeof(header), 1, fp);
-
-    uint64_t path_offset_accum = 0;
     for (int i = 0; i < count; i++) {
-        paf_index_entry_t idx;
-        memset(&idx, 0, sizeof(idx));
-        idx.path_buffer_offset = path_offset_accum;
-        idx.path_length        = (uint32_t)strlen(entries[i].path);
-        idx.data_size          = entries[i].size;
-
         char fullpath[1024];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", input_paths[0], entries[i].path);
-        FILE* fin = fopen(fullpath, "rb");
-        if (fin) {
-            sha256_context_t ctx;
-            sha256_init(&ctx);
-            uint8_t chunk[65536];
-            size_t n;
-            while ((n = fread(chunk, 1, sizeof(chunk), fin)) > 0)
-                sha256_update(&ctx, chunk, n);
-            sha256_final(&ctx, idx.hash);
-            fclose(fin);
+        FILE* fp = fopen(fullpath, "rb");
+        if (!fp) { free(entries[i].path); continue; }
+        uint8_t* buf = (uint8_t*)malloc(entries[i].size);
+        if (buf && fread(buf, 1, entries[i].size, fp) == entries[i].size) {
+            paf_generator_add_file(&gen, entries[i].path, buf, entries[i].size);
         }
-
-        fwrite(&idx, sizeof(idx), 1, fp);
-        path_offset_accum += (uint64_t)strlen(entries[i].path);
-    }
-
-    for (int i = 0; i < count; i++) {
-        fwrite(entries[i].path, 1, strlen(entries[i].path), fp);
+        free(buf);
+        fclose(fp);
         free(entries[i].path);
     }
     free(entries);
-    fclose(fp);
-    return 0;
+
+    int result = paf_generator_finalize(&gen, out_paf);
+    paf_generator_cleanup(&gen);
+    return result;
 }
 
 int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite) {
