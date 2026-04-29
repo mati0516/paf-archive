@@ -8,6 +8,20 @@
 
 #define PAF_EXTRACT_SMART_OVERWRITE 0x01
 
+#ifdef _WIN32
+  #ifdef LIBPAF_EXPORTS
+    #define PAF_API __declspec(dllexport)
+  #else
+    #define PAF_API __declspec(dllimport)
+  #endif
+#else
+  #define PAF_API
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #pragma pack(push, 1)
 
 /**
@@ -36,5 +50,9 @@ typedef struct {
 } paf_index_entry_t;
 
 #pragma pack(pop)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // LIBPAF2_H

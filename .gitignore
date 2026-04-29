@@ -198,6 +198,17 @@ cython_debug/
 /test_paf_ext
 /test_paf2*
 *.paf
+/bench/
+/bench_win_data/
+/build_android/
+/build_linux/
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
 
 # AI Agent configuration
 .clinerules

@@ -20,18 +20,23 @@ int paf_gpu_get_info(paf_gpu_info_t* info) {
 
 #ifdef _WIN32
     // Windows: Check DXGI for VRAM and DirectStorage capability
-    IDXGIFactory* factory;
+    // Note: Requires -ldxgi on MinGW or dxgi.lib on MSVC
+    HRESULT hr;
+    typedef HRESULT (WINAPI *LPCREATEDXGIFACTORY)(REFIID, void**);
+    
+    // We can try to use the library directly or assume it's linked
+    // For v1.0, we'll stick to static linking but add clear comments for the linker
+    IDXGIFactory* factory = NULL;
     if (SUCCEEDED(CreateDXGIFactory(&IID_IDXGIFactory, (void**)&factory))) {
-        IDXGIAdapter* adapter;
+        IDXGIAdapter* adapter = NULL;
         if (SUCCEEDED(factory->lpVtbl->EnumAdapters(factory, 0, &adapter))) {
             DXGI_ADAPTER_DESC desc;
             adapter->lpVtbl->GetDesc(adapter, &desc);
             info->total_vram = desc.DedicatedVideoMemory;
             wcstombs(info->device_name, desc.Description, sizeof(info->device_name));
             
-            // On Windows, if we have a modern GPU, we assume Vulkan/DirectStorage potential
             info->supports_vulkan = 1; 
-            info->supports_direct_io = 1; // DirectStorage is Win11/10 native
+            info->supports_direct_io = 1;
             info->supports_cuda = (strstr(info->device_name, "NVIDIA") != NULL);
             
             adapter->lpVtbl->Release(adapter);
@@ -81,9 +86,9 @@ paf_batch_config_t paf_gpu_calculate_batch(uint64_t available_vram, uint32_t tot
 int paf_gpu_direct_load(const char* path, uint64_t offset, uint64_t size, void* gpu_buffer) {
     // This is a placeholder for DirectStorage implementation.
     // In a real scenario, this would use IDStorageQueue::EnqueueRequest
-    printf("[DirectStorage] Loading %s (Offset: %llu, Size: %llu) -> GPU Buffer %p\n", path, offset, size, gpu_buffer);
+    printf("[DirectStorage] Loading %s (Offset: %llu, Size: %llu) -> GPU Buffer %p\n", 
+           path, (unsigned long long)offset, (unsigned long long)size, gpu_buffer);
     
     // Simulation: Just a normal read for now if we don't have DS ready
-    // return 0;
     return 0;
 }

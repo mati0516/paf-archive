@@ -39,14 +39,17 @@ int paf_extract_file(const char* paf_path, const char* internal_path, const char
         char path[1024] = {0};
         uint16_t len;
         if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
-        if (len >= sizeof(path)) break;
+        if (len >= sizeof(path)) {
+            fseek(fp, len + sizeof(uint32_t)*3, SEEK_CUR);
+            continue;
+        }
         if (fread(path, 1, len, fp) != len) break;
         path[len] = '\0';
 
         uint32_t size, offset, crc;
-        (void)fread(&size, sizeof(uint32_t), 1, fp);
-        (void)fread(&offset, sizeof(uint32_t), 1, fp);
-        (void)fread(&crc, sizeof(uint32_t), 1, fp);
+        if (fread(&size, sizeof(uint32_t), 1, fp) != 1) break;
+        if (fread(&offset, sizeof(uint32_t), 1, fp) != 1) break;
+        if (fread(&crc, sizeof(uint32_t), 1, fp) != 1) break;
 
         if (strcmp(path, internal_path) == 0) {
             fseek(fp, 32 + offset, SEEK_SET);
@@ -63,7 +66,12 @@ int paf_extract_file(const char* paf_path, const char* internal_path, const char
                 return -5;
             }
 
-            (void)fread(buffer, 1, size, fp);
+            if (fread(buffer, 1, size, fp) != size) {
+                free(buffer);
+                fclose(out);
+                fclose(fp);
+                return -7;
+            }
             fwrite(buffer, 1, size, out);
             free(buffer);
             fclose(out);
@@ -106,21 +114,32 @@ int paf_extract_folder(const char* paf_path, const char* internal_dir, const cha
         char path[1024] = {0};
         uint16_t len;
         if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
-        if (len >= sizeof(path)) break;
+        if (len >= sizeof(path)) {
+            fseek(fp, len + sizeof(uint32_t)*3, SEEK_CUR);
+            continue;
+        }
         if (fread(path, 1, len, fp) != len) break;
         path[len] = '\0';
 
         uint32_t size, offset, crc;
-        (void)fread(&size, sizeof(uint32_t), 1, fp);
-        (void)fread(&offset, sizeof(uint32_t), 1, fp);
-        (void)fread(&crc, sizeof(uint32_t), 1, fp);
+        if (fread(&size, sizeof(uint32_t), 1, fp) != 1) break;
+        if (fread(&offset, sizeof(uint32_t), 1, fp) != 1) break;
+        if (fread(&crc, sizeof(uint32_t), 1, fp) != 1) break;
 
         if (!path_starts_with(path, internal_dir)) continue;
+
+        // Security Check
+        if (strstr(path, "..") != NULL || path[0] == '/' || path[0] == '\\') {
+            printf("[Security] Blocked unsafe path in folder extraction: %s\n", path);
+            continue;
+        }
 
         fseek(fp, 32 + offset, SEEK_SET);
 
         char fullpath[1024];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path + strlen(internal_dir));
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path + strlen(internal_dir)) >= (int)sizeof(fullpath)) {
+            continue;
+        }
 
         // Ensure parent directories exist
         for (char* p = fullpath + strlen(output_dir) + 1; *p; ++p) {

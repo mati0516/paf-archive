@@ -5,7 +5,14 @@
 #include <stdlib.h>
 
 // External DirectStorage wrapper
-int paf_io_directstorage_load(const wchar_t* path, uint64_t offset, uint64_t size, void* destination);
+#ifdef _WIN32
+extern "C" int paf_io_directstorage_load(const wchar_t* path, uint64_t offset, uint64_t size, void* destination);
+#else
+static int paf_io_directstorage_load(const void* path, uint64_t offset, uint64_t size, void* destination) {
+    (void)path; (void)offset; (void)size; (void)destination;
+    return -1; 
+}
+#endif
 
 int paf_extractor_gpu_run(paf_extractor_t* ext, const char* path) {
     if (!ext || !path) return -1;
@@ -14,7 +21,7 @@ int paf_extractor_gpu_run(paf_extractor_t* ext, const char* path) {
     paf_gpu_info_t gpu;
     paf_gpu_get_info(&gpu);
     printf("Detected Hardware: %s\n", gpu.device_name);
-    printf(" - VRAM: %llu MB\n", gpu.total_vram / 1024 / 1024);
+    printf(" - VRAM: %llu MB\n", (unsigned long long)gpu.total_vram / 1024 / 1024);
     printf(" - CUDA Support: %s\n", gpu.supports_cuda ? "Yes" : "No");
     printf(" - Vulkan Support: %s\n", gpu.supports_vulkan ? "Yes (AMD/Intel/Mobile)" : "No");
     printf(" - Direct IO: %s\n", gpu.supports_direct_io ? "Yes (NVMe -> GPU Direct Path)" : "No");

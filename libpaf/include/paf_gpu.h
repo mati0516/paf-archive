@@ -3,6 +3,13 @@
 
 #include "paf.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct paf_extractor_t;
+typedef struct paf_extractor_t paf_extractor_t;
+
 typedef struct {
     uint64_t total_vram;
     uint64_t available_vram;
@@ -22,7 +29,7 @@ typedef struct {
  * Get GPU information.
  * Implementation will use CUDA or Vulkan depending on platform.
  */
-int paf_gpu_get_info(paf_gpu_info_t* info);
+PAF_API int paf_gpu_get_info(paf_gpu_info_t* info);
 
 /**
  * Calculate the optimal batch size based on available VRAM and file statistics.
@@ -30,7 +37,7 @@ int paf_gpu_get_info(paf_gpu_info_t* info);
  * @param total_files Total number of files in the archive.
  * @param avg_file_size Average size of a single file in bytes.
  */
-paf_batch_config_t paf_gpu_calculate_batch(uint64_t available_vram, uint32_t total_files, uint64_t avg_file_size);
+PAF_API paf_batch_config_t paf_gpu_calculate_batch(uint64_t available_vram, uint32_t total_files, uint64_t avg_file_size);
 
 /**
  * High-performance NVMe -> GPU Direct Load.
@@ -40,6 +47,10 @@ paf_batch_config_t paf_gpu_calculate_batch(uint64_t available_vram, uint32_t tot
  * GPU-Accelerated Search across all file paths.
  * Returns the number of matches found.
  */
-int paf_gpu_search_files(paf_extractor_t* ext, const char* pattern, uint32_t* out_indices, uint32_t max_results);
+PAF_API int paf_gpu_search_files(paf_extractor_t* ext, const char* pattern, uint32_t* out_indices, uint32_t max_results);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // PAF_GPU_H

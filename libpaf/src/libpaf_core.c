@@ -3,16 +3,40 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <dirent.h>
 #include "fnmatch.h"
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
+#include "dirent_win.h"
 #include <direct.h>
+#include <io.h>
 #define MKDIR(path) _mkdir(path)
+#define F_OK 0
+#define access _access
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
+#ifndef S_ISREG
+#define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+#endif
 #else
+#include <dirent.h>
 #include <unistd.h>
+#include <sys/types.h>
 #define MKDIR(path) mkdir(path, 0755)
 #endif
+
+// Security: Check if a path is safe (no traversal, valid length)
+static int paf_is_path_safe(const char* path) {
+    if (!path || path[0] == '\0') return 0;
+    if (strlen(path) >= 1024) return 0;
+    
+    // Block absolute paths and traversal
+    if (path[0] == '/' || path[0] == '\\') return 0;
+    if (strstr(path, "..") != NULL) return 0;
+    if (strstr(path, ":") != NULL) return 0; // Block drive letters on Windows
+    
+    return 1;
+}
 
 uint32_t crc32(const unsigned char* data, size_t length) {
     uint32_t crc = 0xFFFFFFFF;
@@ -221,19 +245,40 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
         return -3;
     }
 
+    long index_start = ftell(fp);
+    for (uint32_t j = 0; j < file_count; ++j) {
+        uint16_t skip_len;
+        if (fread(&skip_len, sizeof(uint16_t), 1, fp) != 1) break;
+        fseek(fp, skip_len + sizeof(uint32_t) * 3, SEEK_CUR);
+    }
+    long data_block_start = ftell(fp);
+
     for (uint32_t i = 0; i < file_count; ++i) {
+        fseek(fp, index_start, SEEK_SET);
+        for (uint32_t j = 0; j < i; ++j) {
+            uint16_t skip_len;
+            if (fread(&skip_len, sizeof(uint16_t), 1, fp) != 1) break;
+            fseek(fp, skip_len + sizeof(uint32_t) * 3, SEEK_CUR);
+        }
+
         uint16_t len;
         char path[1024];
-        (void)fread(&len, sizeof(uint16_t), 1, fp);
-        (void)fread(path, 1, len, fp);
+        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
+        if (len >= sizeof(path)) {
+            continue;
+        }
+        if (fread(path, 1, len, fp) != len) break;
         path[len] = '\0';
+        
         uint32_t size, offset, crc;
-        (void)fread(&size, sizeof(uint32_t), 1, fp);
-        (void)fread(&offset, sizeof(uint32_t), 1, fp);
-        (void)fread(&crc, sizeof(uint32_t), 1, fp);
+        if (fread(&size, sizeof(uint32_t), 1, fp) != 1) break;
+        if (fread(&offset, sizeof(uint32_t), 1, fp) != 1) break;
+        if (fread(&crc, sizeof(uint32_t), 1, fp) != 1) break;
+
+        if (!paf_is_path_safe(path)) continue;
 
         char fullpath[1024];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path);
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path) >= (int)sizeof(fullpath)) continue;
         ensure_directory(fullpath);
 
         if (!overwrite) {
@@ -241,26 +286,19 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
             if (test) { fclose(test); continue; }
         }
 
-        long data_offset = ftell(fp);
-        fseek(fp, 4 + sizeof(uint32_t), SEEK_SET);
-        for (uint32_t j = 0; j < file_count; ++j) {
-            uint16_t skip_len;
-            (void)fread(&skip_len, sizeof(uint16_t), 1, fp);
-            fseek(fp, skip_len + sizeof(uint32_t)*3 + sizeof(uint32_t), SEEK_CUR);
-        }
-
-        fseek(fp, offset, SEEK_CUR);
+        fseek(fp, data_block_start + offset, SEEK_SET);
 
         FILE* out_fp = fopen(fullpath, "wb");
         if (!out_fp) continue;
 
         char* buffer = malloc(size);
-        (void)fread(buffer, 1, size, fp);
-        fwrite(buffer, 1, size, out_fp);
-        free(buffer);
+        if (buffer) {
+            if (fread(buffer, 1, size, fp) == size) {
+                fwrite(buffer, 1, size, out_fp);
+            }
+            free(buffer);
+        }
         fclose(out_fp);
-
-        fseek(fp, data_offset, SEEK_SET);
     }
 
     fclose(fp);

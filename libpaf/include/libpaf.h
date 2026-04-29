@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "paf.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -23,26 +25,26 @@ typedef struct {
 } PafList;
 
 // Create a .paf archive from specified files or folders
-int paf_create_binary(const char* out_paf_path, const char** input_paths, int path_count, const char* ignore_file_path, int recursive_ignore);
+PAF_API int paf_create_binary(const char* out_paf_path, const char** input_paths, int path_count, const char* ignore_file_path, int recursive_ignore);
 
 // Extract all contents of a .paf archive into a directory
-int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite);
+PAF_API int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite);
 
 // Retrieve the list of files in the archive
-int paf_list_binary(const char* paf_path, PafList* out_list);
-void free_paf_list(PafList* list);
+PAF_API int paf_list_binary(const char* paf_path, PafList* out_list);
+PAF_API void free_paf_list(PafList* list);
 
 // Extract a single file from the archive
-int paf_extract_file(const char* paf_path, const char* internal_path, const char* output_path);
+PAF_API int paf_extract_file(const char* paf_path, const char* internal_path, const char* output_path);
 
 // Extract all files under a specified folder (prefix match)
-int paf_extract_folder(const char* paf_path, const char* internal_dir, const char* output_dir);
+PAF_API int paf_extract_folder(const char* paf_path, const char* internal_dir, const char* output_dir);
 
 // Check if a file exists in the archive
-int file_exists_in_archive(const char* paf_path, const char* internal_path);
+PAF_API int file_exists_in_archive(const char* paf_path, const char* internal_path);
 
 // Check if a folder (prefix) exists in the archive
-int folder_exists_in_archive(const char* paf_path, const char* internal_dir);
+PAF_API int folder_exists_in_archive(const char* paf_path, const char* internal_dir);
 
 #ifdef __cplusplus
 }

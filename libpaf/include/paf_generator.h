@@ -4,6 +4,10 @@
 #include "paf.h"
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     FILE* data_tmp;
     FILE* index_tmp;
@@ -11,13 +15,21 @@ typedef struct {
     uint32_t file_count;
     uint64_t current_data_offset;
     uint64_t current_path_offset;
+    
+    // GPU Batch Buffer (Pre-allocated)
+    uint8_t* batch_data_buffer;
+    uint64_t* batch_sizes;
+    uint64_t* batch_offsets;
+    char** batch_paths;
+    uint32_t batch_count;
+    uint64_t batch_buffer_pos;
 } paf_generator_t;
 
 /**
  * Initialize a PAF v2 generation session.
  * Creates temporary files.
  */
-int paf_generator_init(paf_generator_t* gen);
+PAF_API int paf_generator_init(paf_generator_t* gen);
 
 /**
  * Add a file to the PAF v1 archive.
@@ -26,17 +38,21 @@ int paf_generator_init(paf_generator_t* gen);
  * @param data The file content.
  * @param size The size of the content.
  */
-int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t* data, uint64_t size);
+PAF_API int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t* data, uint64_t size);
 
 /**
  * Finalize the archive and write to output file.
  * Merges parts and cleans up temporary files.
  */
-int paf_generator_finalize(paf_generator_t* gen, const char* output_path);
+PAF_API int paf_generator_finalize(paf_generator_t* gen, const char* output_path);
 
 /**
  * Cleanup generator resources.
  */
-void paf_generator_cleanup(paf_generator_t* gen);
+PAF_API void paf_generator_cleanup(paf_generator_t* gen);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // PAF_GENERATOR_H
