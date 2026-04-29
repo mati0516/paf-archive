@@ -1,4 +1,4 @@
-// libpaf_list.c
+// libpaf_extract.c
 #include "libpaf.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,159 +12,117 @@
 #define MKDIR(path) mkdir(path, 0755)
 #endif
 
-
-
-// Extracts a single file from a .paf archive
-int paf_extract_file(const char* paf_path, const char* internal_path, const char* output_path) {
-    if (!file_exists_in_archive(paf_path, internal_path)) {
-        return -4; // Not found
-    }
-
-    FILE* fp = fopen(paf_path, "rb");
-    if (!fp) return -1;
-
-    char magic[4];
-    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
-        fclose(fp);
-        return -2;
-    }
-
-    uint32_t file_count;
-    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
-        fclose(fp);
-        return -3;
-    }
-
-    for (uint32_t i = 0; i < file_count; ++i) {
-        char path[1024] = {0};
-        uint16_t len;
-        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
-        if (len >= sizeof(path)) {
-            fseek(fp, len + sizeof(uint32_t)*3, SEEK_CUR);
-            continue;
-        }
-        if (fread(path, 1, len, fp) != len) break;
-        path[len] = '\0';
-
-        uint32_t size, offset, crc;
-        if (fread(&size, sizeof(uint32_t), 1, fp) != 1) break;
-        if (fread(&offset, sizeof(uint32_t), 1, fp) != 1) break;
-        if (fread(&crc, sizeof(uint32_t), 1, fp) != 1) break;
-
-        if (strcmp(path, internal_path) == 0) {
-            fseek(fp, 32 + offset, SEEK_SET);
-            FILE* out = fopen(output_path, "wb");
-            if (!out) {
-                fclose(fp);
-                return -4;
-            }
-
-            char* buffer = (char*)malloc(size);
-            if (!buffer) {
-                fclose(out);
-                fclose(fp);
-                return -5;
-            }
-
-            if (fread(buffer, 1, size, fp) != size) {
-                free(buffer);
-                fclose(out);
-                fclose(fp);
-                return -7;
-            }
-            fwrite(buffer, 1, size, out);
-            free(buffer);
-            fclose(out);
-            fclose(fp);
-            return 0;
-        }
-    }
-
-    fclose(fp);
-    return -6;  // file not found
-}
-
-// Checks if a path starts with a prefix (folder match)
 static int path_starts_with(const char* path, const char* prefix) {
     size_t plen = strlen(prefix);
     return strncmp(path, prefix, plen) == 0;
 }
 
-// Extracts all files under a given folder prefix
-int paf_extract_folder(const char* paf_path, const char* internal_dir, const char* output_dir) {
-    if (!folder_exists_in_archive(paf_path, internal_dir)) {
-        return -4; // Not found
-    }
+int paf_extract_file(const char* paf_path, const char* internal_path, const char* output_path) {
+    if (!file_exists_in_archive(paf_path, internal_path)) return -4;
+
     FILE* fp = fopen(paf_path, "rb");
     if (!fp) return -1;
 
-    char magic[4];
-    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    paf_header_t header;
+    if (fread(&header, sizeof(header), 1, fp) != 1 || memcmp(header.magic, PAF_MAGIC, 4) != 0) {
         fclose(fp);
         return -2;
     }
 
-    uint32_t file_count;
-    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
-        fclose(fp);
-        return -3;
+    paf_index_entry_t* idx = (paf_index_entry_t*)malloc(sizeof(paf_index_entry_t) * header.file_count);
+    if (!idx) { fclose(fp); return -1; }
+
+    fseek(fp, (long)header.index_offset, SEEK_SET);
+    if (fread(idx, sizeof(paf_index_entry_t), header.file_count, fp) != header.file_count) {
+        free(idx); fclose(fp); return -3;
     }
 
-    for (uint32_t i = 0; i < file_count; ++i) {
+    for (uint32_t i = 0; i < header.file_count; ++i) {
         char path[1024] = {0};
-        uint16_t len;
-        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
-        if (len >= sizeof(path)) {
-            fseek(fp, len + sizeof(uint32_t)*3, SEEK_CUR);
-            continue;
-        }
-        if (fread(path, 1, len, fp) != len) break;
-        path[len] = '\0';
+        uint32_t path_len = idx[i].path_length;
+        if (path_len >= sizeof(path)) path_len = (uint32_t)sizeof(path) - 1;
 
-        uint32_t size, offset, crc;
-        if (fread(&size, sizeof(uint32_t), 1, fp) != 1) break;
-        if (fread(&offset, sizeof(uint32_t), 1, fp) != 1) break;
-        if (fread(&crc, sizeof(uint32_t), 1, fp) != 1) break;
+        fseek(fp, (long)(header.path_offset + idx[i].path_buffer_offset), SEEK_SET);
+        if (fread(path, 1, path_len, fp) != path_len) continue;
+        path[path_len] = '\0';
+
+        if (strcmp(path, internal_path) != 0) continue;
+
+        fseek(fp, (long)(sizeof(paf_header_t) + idx[i].data_offset), SEEK_SET);
+        FILE* out = fopen(output_path, "wb");
+        if (!out) { free(idx); fclose(fp); return -4; }
+
+        char* buf = (char*)malloc((size_t)idx[i].data_size);
+        if (!buf) { fclose(out); free(idx); fclose(fp); return -5; }
+
+        if (fread(buf, 1, (size_t)idx[i].data_size, fp) != (size_t)idx[i].data_size) {
+            free(buf); fclose(out); free(idx); fclose(fp); return -7;
+        }
+        fwrite(buf, 1, (size_t)idx[i].data_size, out);
+        free(buf); fclose(out); free(idx); fclose(fp);
+        return 0;
+    }
+
+    free(idx);
+    fclose(fp);
+    return -6;
+}
+
+int paf_extract_folder(const char* paf_path, const char* internal_dir, const char* output_dir) {
+    if (!folder_exists_in_archive(paf_path, internal_dir)) return -4;
+
+    FILE* fp = fopen(paf_path, "rb");
+    if (!fp) return -1;
+
+    paf_header_t header;
+    if (fread(&header, sizeof(header), 1, fp) != 1 || memcmp(header.magic, PAF_MAGIC, 4) != 0) {
+        fclose(fp);
+        return -2;
+    }
+
+    paf_index_entry_t* idx = (paf_index_entry_t*)malloc(sizeof(paf_index_entry_t) * header.file_count);
+    if (!idx) { fclose(fp); return -1; }
+
+    fseek(fp, (long)header.index_offset, SEEK_SET);
+    if (fread(idx, sizeof(paf_index_entry_t), header.file_count, fp) != header.file_count) {
+        free(idx); fclose(fp); return -3;
+    }
+
+    size_t dir_len = strlen(internal_dir);
+
+    for (uint32_t i = 0; i < header.file_count; ++i) {
+        char path[1024] = {0};
+        uint32_t path_len = idx[i].path_length;
+        if (path_len >= sizeof(path)) path_len = (uint32_t)sizeof(path) - 1;
+
+        fseek(fp, (long)(header.path_offset + idx[i].path_buffer_offset), SEEK_SET);
+        if (fread(path, 1, path_len, fp) != path_len) continue;
+        path[path_len] = '\0';
 
         if (!path_starts_with(path, internal_dir)) continue;
-
-        // Security Check
-        if (strstr(path, "..") != NULL || path[0] == '/' || path[0] == '\\') {
-            printf("[Security] Blocked unsafe path in folder extraction: %s\n", path);
-            continue;
-        }
-
-        fseek(fp, 32 + offset, SEEK_SET);
+        if (strstr(path, "..") || path[0] == '/' || path[0] == '\\') continue;
 
         char fullpath[1024];
-        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path + strlen(internal_dir)) >= (int)sizeof(fullpath)) {
-            continue;
-        }
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path + dir_len) >= (int)sizeof(fullpath)) continue;
 
-        // Ensure parent directories exist
         for (char* p = fullpath + strlen(output_dir) + 1; *p; ++p) {
-            if (*p == '/' || *p == '\\') {
-                *p = '\0';
-                MKDIR(fullpath);
-                *p = '/';
-            }
+            if (*p == '/' || *p == '\\') { *p = '\0'; MKDIR(fullpath); *p = '/'; }
         }
 
+        fseek(fp, (long)(sizeof(paf_header_t) + idx[i].data_offset), SEEK_SET);
         FILE* out = fopen(fullpath, "wb");
         if (!out) continue;
 
-        char* buffer = (char*)malloc(size);
-        if (!buffer) {
-            fclose(out);
-            continue;
+        char* buf = (char*)malloc((size_t)idx[i].data_size);
+        if (buf) {
+            (void)fread(buf, 1, (size_t)idx[i].data_size, fp);
+            fwrite(buf, 1, (size_t)idx[i].data_size, out);
+            free(buf);
         }
-
-        (void)fread(buffer, 1, size, fp);
-        fwrite(buffer, 1, size, out);
-        free(buffer);
         fclose(out);
     }
 
+    free(idx);
     fclose(fp);
     return 0;
 }

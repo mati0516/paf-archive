@@ -1,5 +1,6 @@
 #define LIBPAF_EXPORTS
 #include "libpaf.h"
+#include "paf_generator.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,87 +195,59 @@ int paf_create_binary(const char* out_paf_path, const char** input_paths, int pa
     }
     free_ignore_list(&root_rules);
 
-    FILE* out = fopen(out_paf_path, "wb");
-    if (!out) return -1;
-
-    fwrite("PAF1", 1, 4, out);
-    fwrite(&count, sizeof(uint32_t), 1, out);
-
-    uint32_t offset = 0;
-    for (int i = 0; i < count; ++i) {
-        uint16_t len = (uint16_t)strlen(entries[i].path);
-        fwrite(&len, sizeof(uint16_t), 1, out);
-        fwrite(entries[i].path, 1, len, out);
-        fwrite(&entries[i].size, sizeof(uint32_t), 1, out);
-        fwrite(&offset, sizeof(uint32_t), 1, out);
-        fwrite(&entries[i].crc32, sizeof(uint32_t), 1, out);
-        entries[i].offset = offset;
-        offset += entries[i].size;
+    paf_generator_t gen;
+    if (paf_generator_init(&gen) != 0) {
+        for (int i = 0; i < count; ++i) free(entries[i].path);
+        free(entries);
+        return -1;
     }
 
     for (int i = 0; i < count; ++i) {
         char fullpath[1024];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", input_paths[0], entries[i].path);
         FILE* fp = fopen(fullpath, "rb");
-        if (!fp) continue;
-        char* buf = malloc(entries[i].size);
-        (void)fread(buf, 1, entries[i].size, fp);
-        fclose(fp);
-        fwrite(buf, 1, entries[i].size, out);
+        if (!fp) { free(entries[i].path); continue; }
+        uint8_t* buf = (uint8_t*)malloc(entries[i].size);
+        if (buf && fread(buf, 1, entries[i].size, fp) == entries[i].size) {
+            paf_generator_add_file(&gen, entries[i].path, buf, entries[i].size);
+        }
         free(buf);
+        fclose(fp);
+        free(entries[i].path);
     }
-
-    for (int i = 0; i < count; ++i) free(entries[i].path);
     free(entries);
-    fclose(out);
-    return 0;
+
+    int result = paf_generator_finalize(&gen, out_paf_path);
+    paf_generator_cleanup(&gen);
+    return result;
 }
 
 int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite) {
     FILE* fp = fopen(paf_path, "rb");
     if (!fp) return -1;
 
-    char magic[4];
-    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    paf_header_t header;
+    if (fread(&header, sizeof(header), 1, fp) != 1 || memcmp(header.magic, PAF_MAGIC, 4) != 0) {
         fclose(fp);
         return -2;
     }
 
-    uint32_t file_count;
-    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
-        fclose(fp);
-        return -3;
+    paf_index_entry_t* idx = (paf_index_entry_t*)malloc(sizeof(paf_index_entry_t) * header.file_count);
+    if (!idx) { fclose(fp); return -1; }
+
+    fseek(fp, (long)header.index_offset, SEEK_SET);
+    if (fread(idx, sizeof(paf_index_entry_t), header.file_count, fp) != header.file_count) {
+        free(idx); fclose(fp); return -3;
     }
 
-    long index_start = ftell(fp);
-    for (uint32_t j = 0; j < file_count; ++j) {
-        uint16_t skip_len;
-        if (fread(&skip_len, sizeof(uint16_t), 1, fp) != 1) break;
-        fseek(fp, skip_len + sizeof(uint32_t) * 3, SEEK_CUR);
-    }
-    long data_block_start = ftell(fp);
+    for (uint32_t i = 0; i < header.file_count; ++i) {
+        char path[1024] = {0};
+        uint32_t path_len = idx[i].path_length;
+        if (path_len >= sizeof(path)) path_len = (uint32_t)sizeof(path) - 1;
 
-    for (uint32_t i = 0; i < file_count; ++i) {
-        fseek(fp, index_start, SEEK_SET);
-        for (uint32_t j = 0; j < i; ++j) {
-            uint16_t skip_len;
-            if (fread(&skip_len, sizeof(uint16_t), 1, fp) != 1) break;
-            fseek(fp, skip_len + sizeof(uint32_t) * 3, SEEK_CUR);
-        }
-
-        uint16_t len;
-        char path[1024];
-        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
-        if (len >= sizeof(path)) {
-            continue;
-        }
-        if (fread(path, 1, len, fp) != len) break;
-        path[len] = '\0';
-        
-        uint32_t size, offset, crc;
-        if (fread(&size, sizeof(uint32_t), 1, fp) != 1) break;
-        if (fread(&offset, sizeof(uint32_t), 1, fp) != 1) break;
-        if (fread(&crc, sizeof(uint32_t), 1, fp) != 1) break;
+        fseek(fp, (long)(header.path_offset + idx[i].path_buffer_offset), SEEK_SET);
+        if (fread(path, 1, path_len, fp) != path_len) continue;
+        path[path_len] = '\0';
 
         if (!paf_is_path_safe(path)) continue;
 
@@ -287,21 +260,21 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
             if (test) { fclose(test); continue; }
         }
 
-        fseek(fp, data_block_start + offset, SEEK_SET);
-
+        fseek(fp, (long)(sizeof(paf_header_t) + idx[i].data_offset), SEEK_SET);
         FILE* out_fp = fopen(fullpath, "wb");
         if (!out_fp) continue;
 
-        char* buffer = malloc(size);
+        char* buffer = (char*)malloc((size_t)idx[i].data_size);
         if (buffer) {
-            if (fread(buffer, 1, size, fp) == size) {
-                fwrite(buffer, 1, size, out_fp);
+            if (fread(buffer, 1, (size_t)idx[i].data_size, fp) == (size_t)idx[i].data_size) {
+                fwrite(buffer, 1, (size_t)idx[i].data_size, out_fp);
             }
             free(buffer);
         }
         fclose(out_fp);
     }
 
+    free(idx);
     fclose(fp);
     return 0;
 }
