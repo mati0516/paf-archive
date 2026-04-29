@@ -42,12 +42,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Setup Android NDK
+      id: setup-ndk
       uses: n0rt3n/setup-ndk@v1
       with:
         ndk-version: r27c
     - name: Compile Android libpaf (ARM64)
       run: |
-        $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang \
+        ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang \
         -O3 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -o libpaf-android-arm64.so
     - name: Upload Android Artifact
       uses: actions/upload-artifact@v4

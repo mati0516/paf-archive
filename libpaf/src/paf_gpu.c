@@ -3,29 +3,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(PAF_CI_BUILD)
 #include <windows.h>
 #include <dxgi.h>
 #pragma comment(lib, "dxgi.lib")
+#elif defined(_WIN32)
+#include <windows.h>
 #elif defined(__ANDROID__) || defined(__iphone__) || defined(__APPLE__)
 #include <unistd.h>
 #include <sys/mman.h>
-// For Mobile GPU detection (Vulkan is standard)
-// #include <vulkan/vulkan.h> 
 #endif
 
 int paf_gpu_get_info(paf_gpu_info_t* info) {
     if (!info) return -1;
     memset(info, 0, sizeof(paf_gpu_info_t));
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(PAF_CI_BUILD)
     // Windows: Check DXGI for VRAM and DirectStorage capability
-    // Note: Requires -ldxgi on MinGW or dxgi.lib on MSVC
-    HRESULT hr;
-    typedef HRESULT (WINAPI *LPCREATEDXGIFACTORY)(REFIID, void**);
-    
-    // We can try to use the library directly or assume it's linked
-    // For v1.0, we'll stick to static linking but add clear comments for the linker
     IDXGIFactory* factory = NULL;
     if (SUCCEEDED(CreateDXGIFactory(&IID_IDXGIFactory, (void**)&factory))) {
         IDXGIAdapter* adapter = NULL;
@@ -43,6 +37,9 @@ int paf_gpu_get_info(paf_gpu_info_t* info) {
         }
         factory->lpVtbl->Release(factory);
     }
+#elif defined(_WIN32)
+    strcpy(info->device_name, "Windows Generic (CI Build)");
+    info->total_vram = 0;
 #elif defined(__ANDROID__) || defined(__APPLE__)
     // Mobile: Vulkan/Metal is the primary path
     info->supports_vulkan = 1;
