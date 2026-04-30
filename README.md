@@ -1,207 +1,198 @@
 # Parallel Archive Format (PAF)
 
-PAF は GPU 並列 SHA-256 ハッシュと高速 NVMe I/O を中心に設計した、非圧縮の高性能アーカイブフォーマットです。  
-ファイルコレクション全体のハッシュ計算を GPU でバッチ処理し、Windows では Microsoft DirectStorage による NVMe 直接読み込みを利用することで I/O ボトルネックを解消します。
+PAF is a high-performance, non-compressed archive format designed around GPU-parallel SHA-256 hashing and fast NVMe I/O.  
+It eliminates I/O bottlenecks for large file collections by batching hash computation on the GPU and (on Windows) using Microsoft DirectStorage for direct NVMe reads.
 
-## 主な特徴
+## Key Features
 
-- **GPU 並列 SHA-256**: CUDA (NVIDIA) または Vulkan コンピュートシェーダー (AMD/Intel/Linux/Android) でバッチハッシュ。GPU 未搭載時は CPU に自動フォールバック。
-- **実行時 GPU 検出**: コンパイル時フラグ不要。`libpaf.dll` / `libpaf.so` が起動時に `paf_cuda.dll`・`libvulkan.so.1`・`dstorage.dll` をプローブし、最良のバックエンドを選択。
-- **Microsoft DirectStorage v1.2.2** (Windows): NVMe→ホストメモリ転送、および `DSTORAGE_REQUEST_DESTINATION_BUFFER` を使った真の NVMe→GPU DMA (CPU 関与なし)。
-- **O(N) デルタエンジン**: インデックス内の SHA-256 ハッシュのみで比較 — ファイルデータの再読み込み不要。
-- **バイナリパッチ PAF**: `paf_create_patch` が rsync スタイルのブロックデルタで UPDATED ファイルのみ含むコンパクトなパッチアーカイブを生成。`paf_patch_apply_atomic` が SHA-256 検証＋アトミックリネームで適用。
-- **インデックス専用アーカイブ**: データブロックなし・メタデータのみの `.pafi` ファイルでリモートデルタ計算が可能。
-- **マルチプラットフォーム**: Windows (GPU + DirectStorage)、Linux (Vulkan GPU)、Android ARM64。
+- **GPU-Parallel SHA-256**: Batch hashing via CUDA (NVIDIA) or Vulkan compute (AMD/Intel/Linux/Android). Automatically falls back to CPU when no GPU is present.
+- **Runtime GPU Detection**: No compile-time flags. `libpaf.dll` / `libpaf.so` probes `paf_cuda.dll`, `libvulkan.so.1`, and `dstorage.dll` at startup and selects the best available backend.
+- **Microsoft DirectStorage v1.2.2** (Windows): NVMe→host transfers and true NVMe→GPU DMA via `DSTORAGE_REQUEST_DESTINATION_BUFFER` with no CPU involvement.
+- **O(N) Delta Engine**: Compares archives using only the embedded SHA-256 hashes — no file data re-read required.
+- **Binary Patch PAF**: `paf_create_patch` produces a compact patch archive using rsync-style block deltas for UPDATED files. `paf_patch_apply_atomic` applies it with SHA-256 verification and atomic rename.
+- **Index-Only Archives**: Lightweight `.pafi` files (metadata only, no data block) for remote delta calculation without shipping full archives.
+- **Multi-Platform**: Windows (GPU + DirectStorage), Linux (Vulkan GPU), Android ARM64.
 
-## パフォーマンス (100,000 ファイル、RTX 2080)
+## Performance
 
-| 方式 | 時間 | スループット | 備考 |
-|:---|:---|:---|:---|
-| **PAF GPU (CUDA + DirectStorage)** | **0.69s** | **143,904 files/sec** | RTX 2080 |
-| PAF CPU | 1.12s | 89,285 files/sec | CPU SHA-256 フォールバック |
-| TAR | 1.04s | 96,153 files/sec | Windows 標準 |
-| ZIP (Deflate) | 10.45s | 9,569 files/sec | Windows 標準 |
+> Benchmarks coming soon.
 
-> GPU アクセラレーション使用時、PAF は ZIP より約 15 倍高速。
-
-## GPU 優先順位
+## GPU Priority Order
 
 ```
 CUDA (paf_cuda.dll)  →  Vulkan (libvulkan + paf_sha256.spv)  →  CPU SHA-256
 ```
 
-初期化はすべて遅延実行 — 明示的な初期化呼び出し不要。  
-Vulkan パスは `paf_sha256.spv`（`libpaf/src/paf_sha256.comp` からコンパイル）をカレントディレクトリまたは `/usr/lib/paf/` に必要とします。
+All detection is lazy — no explicit initialisation call is required. The Vulkan path requires `paf_sha256.spv` (compiled from `libpaf/src/paf_sha256.comp`) in the working directory or `/usr/lib/paf/`.
 
-## アーカイブフォーマット
+## Archive Format
 
 ```
 [Header 32B] [Data Block] [Index Block N×64B] [Path Buffer]
 ```
 
-| セクション | サイズ | 内容 |
+| Section | Size | Description |
 |:---|:---|:---|
-| Header | 32 B | マジック `PAF1`、バージョン、フラグ、ファイル数、インデックス/パスオフセット |
-| Data Block | 可変 | 生ファイルデータの連続領域（`PAF_FLAG_INDEX_ONLY` 時は省略） |
-| Index Block | N × 64 B | ファイルごとのメタデータ（下記参照） |
-| Path Buffer | 可変 | UTF-8 ファイルパス（NUL なし、長さは index で管理） |
+| Header | 32 B | Magic `PAF1`, version, flags, file count, index/path offsets |
+| Data Block | Variable | Raw file data, contiguous (absent when `PAF_FLAG_INDEX_ONLY`) |
+| Index Block | N × 64 B | Per-file metadata (see below) |
+| Path Buffer | Variable | UTF-8 file paths (no NUL terminator; length stored in index) |
 
-### Index Entry フィールド (64 bytes、固定長)
+### Index Entry Fields (64 bytes, fixed-size for GPU coalesced access)
 
-| オフセット | サイズ | フィールド | 説明 |
+| Offset | Size | Field | Description |
 |:---|:---|:---|:---|
-| 0 | 8 B | `path_buffer_offset` | Path Buffer 内バイトオフセット |
-| 8 | 4 B | `path_length` | パスのバイト長 |
-| 12 | 4 B | `flags` | `PAF_ENTRY_*` ビットマスク |
-| 16 | 8 B | `data_offset` | Data Block 内バイトオフセット |
-| 24 | 8 B | `data_size` | データのバイトサイズ |
-| 32 | 32 B | `hash` | **SHA-256** — 唯一の整合性チェックサム |
+| 0 | 8 B | `path_buffer_offset` | Byte offset within Path Buffer |
+| 8 | 4 B | `path_length` | Byte length of UTF-8 path |
+| 12 | 4 B | `flags` | `PAF_ENTRY_*` bitmask |
+| 16 | 8 B | `data_offset` | Byte offset within Data Block |
+| 24 | 8 B | `data_size` | Size of data block entry in bytes |
+| 32 | 32 B | `hash` | **SHA-256** — sole integrity checksum |
 
-> `PAF_ENTRY_BINARY_DELTA` の場合、`hash` はデルタ適用後のファイル（= 新ファイル）の SHA-256 です。
+> For `PAF_ENTRY_BINARY_DELTA` entries, `hash` is the SHA-256 of the file *after* applying the delta (i.e. the new file).
 
-### ヘッダーフラグ (`paf_header_t.flags`)
+### Header Flags (`paf_header_t.flags`)
 
-| フラグ | 値 | 意味 |
+| Flag | Value | Meaning |
 |:---|:---|:---|
-| `PAF_FLAG_INDEX_ONLY` | `0x02` | Data Block なし。インデックス専用スナップショット |
+| `PAF_FLAG_INDEX_ONLY` | `0x02` | Data Block absent — index-only snapshot |
 
-### エントリフラグ (`paf_index_entry_t.flags`)
+### Per-Entry Flags (`paf_index_entry_t.flags`)
 
-| フラグ | 値 | 意味 |
+| Flag | Value | Meaning |
 |:---|:---|:---|
-| `PAF_ENTRY_DELETED` | `0x04` | 削除済みファイル。`data_size = 0`、データなし |
-| `PAF_ENTRY_BINARY_DELTA` | `0x08` | データブロックは PAFD バイナリデルタ |
+| `PAF_ENTRY_DELETED` | `0x04` | File deleted; `data_size = 0`, no data |
+| `PAF_ENTRY_BINARY_DELTA` | `0x08` | Data block is a PAFD binary delta |
 
-### PAFD バイナリデルタフォーマット
+### PAFD Binary Delta Format
 
 ```
-[magic "PAFD" 4B] [命令数 4B] [旧ファイルサイズ 8B]
+[magic "PAFD" 4B] [instr_count 4B] [old_file_size 8B]
 N × { [type 1B] [offset 8B] [size 4B] [data if LITERAL] }
 ```
 
-| type | 意味 |
+| type | Meaning |
 |:---|:---|
-| `0` COPY | 旧ファイルの `offset` から `size` バイトをコピー |
-| `1` LITERAL | 後続の `size` バイトをそのまま出力 |
+| `0` COPY | Copy `size` bytes from `offset` in the old file |
+| `1` LITERAL | Emit the following `size` bytes verbatim |
 
-4 KB ブロック単位で FNV-1a 64-bit ハッシュによるマッチングを行い、マッチしたブロックを COPY 命令に、差分を LITERAL 命令に変換します。
+Matching is performed on 4 KB aligned blocks using FNV-1a 64-bit hashing with an open-addressing hash table.
 
-## デルタアップデート
+## Delta Updates
 
-PAF の各インデックスエントリには SHA-256 ハッシュが埋め込まれているため、**ファイルデータを再読み込みせずに O(N) で差分を検出**できます。  
-ゲームアセットのアップデート配信やディレクトリ同期に使用できます。
+Every index entry embeds a SHA-256 hash, enabling **O(N) delta detection without re-reading any file data**.  
+Suitable for game asset update delivery and directory synchronisation (rsync equivalent).
 
-### ワークフロー A — ディレクトリ差分コピー
-
-```
-旧ディレクトリ ─── paf_create_index_only ───▶ old.pafi (数MB、データなし)
-新ディレクトリ ─── paf_create_index_only ───▶ new.pafi
-                                               │
-                                               ▼
-                              paf_delta_calculate(old.pafi, new.pafi)
-                                               │
-                        ┌──────────────────────┤
-                        │  ADDED / UPDATED / DELETED エントリ一覧
-                        ▼
-          paf_patch_apply_from_dir(new_dir, delta, dst_dir)
-          → 変更ファイルのみコピー、削除ファイルを除去
-```
-
-### ワークフロー B — バイナリパッチ PAF（配布向け）
+### Workflow A — Directory Diff Copy
 
 ```
-旧ディレクトリ ─────────────────────────────────────────┐
-新ディレクトリ ─── paf_create_patch ──▶ patch.paf      │
-                   ADDED   : 新ファイル全データ           │
-                   UPDATED : PAFD バイナリデルタ          │
-                   DELETED : マーカーのみ (data_size=0)  │
-                                          │               ▼
-                            paf_patch_apply_atomic(patch.paf, dst_dir)
-                            旧ファイル + デルタ → .paf_stage
-                            → SHA-256 検証 → atomic rename
+old dir ── paf_create_index_only ──▶ old.pafi  (MB-range, no data)
+new dir ── paf_create_index_only ──▶ new.pafi
+                                      │
+                                      ▼
+                     paf_delta_calculate(old.pafi, new.pafi)
+                                      │
+                 ┌────────────────────┤
+                 │  ADDED / UPDATED / DELETED entry list
+                 ▼
+   paf_patch_apply_from_dir(new_dir, delta, dst_dir)
+   → copies changed files only, removes deleted files
 ```
 
-### 差分ステータス
+### Workflow B — Binary Patch PAF (distribution)
 
-| ステータス | 意味 |
+```
+old dir ────────────────────────────────────────────┐
+new dir ── paf_create_patch ──▶ patch.paf           │
+           ADDED   : full file data                  │
+           UPDATED : PAFD binary delta               │
+           DELETED : marker only (data_size = 0)    │
+                                    │                ▼
+                    paf_patch_apply_atomic(patch.paf, dst_dir)
+                    old file + delta → .paf_stage
+                    → SHA-256 verify → atomic rename
+```
+
+### Delta Status Values
+
+| Status | Meaning |
 |:---|:---|
-| `PAF_DELTA_ADDED` | 新バージョンに追加されたファイル |
-| `PAF_DELTA_UPDATED` | SHA-256 が変化したファイル |
-| `PAF_DELTA_DELETED` | 旧バージョンにあって新バージョンにないファイル |
+| `PAF_DELTA_ADDED` | File present in new version only |
+| `PAF_DELTA_UPDATED` | SHA-256 changed between versions |
+| `PAF_DELTA_DELETED` | File present in old version only |
 
-### コード例
+### Code Examples
 
 ```c
-// ── ワークフロー A: ディレクトリ差分コピー ──────────────────────────────
+// ── Workflow A: directory diff copy ─────────────────────────────────────
 paf_create_index_only("old.pafi", (const char*[]){"/game/v1"}, 1, NULL);
 paf_create_index_only("new.pafi", (const char*[]){"/game/v2"}, 1, NULL);
 
 paf_delta_t delta;
 paf_delta_calculate("old.pafi", "new.pafi", &delta);
-printf("%u 件の変更\n", delta.count);
+printf("%u change(s)\n", delta.count);
 
-// 変更ファイルのみコピー
 paf_patch_apply_from_dir("/game/v2", &delta, "/game/installed", NULL, NULL);
 paf_delta_free(&delta);
 
-// ── ワークフロー B: バイナリパッチ PAF ────────────────────────────────
-// 配布サーバー側: コンパクトなパッチ PAF を生成
+// ── Workflow B: binary patch PAF ────────────────────────────────────────
+// Server side: generate compact patch archive
 paf_create_patch("/game/v1", "/game/v2", "patch_v1_v2.paf", NULL, NULL);
 
-// クライアント側: SHA-256 検証 + アトミックリネームで安全に適用
+// Client side: apply with SHA-256 verification + atomic rename
 paf_patch_apply_atomic("patch_v1_v2.paf", "/game/installed", NULL, NULL);
 ```
 
-`paf_delta_optimize_io` を呼ぶと差分エントリをオフセット順にソートし、シーケンシャルアクセスで I/O 効率を最大化できます。
+Call `paf_delta_optimize_io` to sort delta entries by offset, maximising sequential I/O throughput.
 
-## ディレクトリ構成
+## Directory Structure
 
 ```
 libpaf/
-  include/              公開 C ヘッダー
-    paf.h               フォーマット定義 (paf_header_t, paf_index_entry_t, フラグ)
-    libpaf.h            主要 API (create/extract/patch)
-    paf_delta.h         デルタ計算・パッチ適用 API
-    paf_extractor.h     ランダムアクセス抽出 + GPU バッチ抽出
-    paf_gpu_loader.h    実行時 GPU 検出 (CUDA / Vulkan / DirectStorage)
-    paf_gpu.h           GPU 直接ロード (DirectStorage / D3D12)
-    paf_vulkan.h        Vulkan コンピュートパイプライン API
-  src/                  コアライブラリ (C)
-    paf_sha256.comp     GLSL SHA-256 コンピュートシェーダー → paf_sha256.spv
-    paf_vulkan.c        Vulkan コンピュートパイプライン (vulkan.h 依存なし)
-    paf_binary_delta.c  rsync スタイルブロックデルタエンジン (PAFD フォーマット)
-    win/                Windows 専用: CUDA カーネル、DirectStorage、D3D12 直接ロード
-test/                   テストスイート (test_paf.c)
-wasm/                   Emscripten バインディング
-.github/workflows/      CI: Windows DLL、Linux .so、Android ARM64
+  include/              Public C headers
+    paf.h               Format definitions (paf_header_t, paf_index_entry_t, flags)
+    libpaf.h            Primary API (create / extract / patch)
+    paf_delta.h         Delta calculation and patch application
+    paf_extractor.h     Random-access extraction + GPU batch extraction
+    paf_gpu_loader.h    Runtime GPU detection (CUDA / Vulkan / DirectStorage)
+    paf_gpu.h           GPU direct load (DirectStorage / D3D12)
+    paf_vulkan.h        Vulkan compute pipeline API
+  src/                  Core library (C)
+    paf_sha256.comp     GLSL SHA-256 compute shader → paf_sha256.spv
+    paf_vulkan.c        Vulkan compute pipeline (no vulkan.h dependency)
+    paf_binary_delta.c  rsync-style block delta engine (PAFD format)
+    win/                Windows-only: CUDA kernel, DirectStorage, D3D12 direct load
+test/                   Test suite (test_paf.c)
+wasm/                   Emscripten bindings
+.github/workflows/      CI: Windows DLL, Linux .so, Android ARM64
 ```
 
-## ビルド
+## Build
 
-### Linux / CI (CPU のみ)
+### Linux / CI (CPU only)
 ```sh
 gcc -O2 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -o libpaf.so
 ```
 
-### Windows — CPU のみ (CI 互換)
+### Windows — CPU only (CI-compatible)
 ```bat
 cl /O2 /LD /Fe:libpaf.dll "-DLIBPAF_EXPORTS" "-DPAF_CI_BUILD" /Ilibpaf/include /Ilibpaf/src/win libpaf/src/*.c
 ```
 
-### Windows — フル GPU (CUDA 13.2 + MSVC + glslangValidator)
+### Windows — full GPU (CUDA 13.2 + MSVC + optional glslangValidator)
 ```powershell
 .\build_paf_gpu.ps1
 ```
-`paf_sha256.comp` → `paf_sha256.spv` (glslangValidator が PATH にある場合)、`paf_cuda_kernels.cu` を nvcc でビルド、`paf_io_directstorage.cpp` + `paf_io_d3d12_direct.cpp` を cl でビルド、`d3d12.lib` とリンクして `libpaf.dll` を生成します。
+Compiles `paf_sha256.comp` → `paf_sha256.spv` (if `glslangValidator` is on PATH), builds `paf_cuda_kernels.cu` via nvcc, `paf_io_directstorage.cpp` + `paf_io_d3d12_direct.cpp` via cl, then links everything into `libpaf.dll` with `d3d12.lib`.
 
 ### Android ARM64
 ```powershell
 .\build_multi_platform.ps1
 ```
 
-## 公開 API
+## Public API
 
-| ヘッダー | 主なエクスポート |
+| Header | Key exports |
 |:---|:---|
 | `libpaf/include/libpaf.h` | `paf_create_binary`, `paf_create_index_only`, `paf_extract_binary`, `paf_create_patch` |
 | `libpaf/include/paf_delta.h` | `paf_delta_calculate`, `paf_delta_free`, `paf_delta_optimize_io`, `paf_patch_apply`, `paf_patch_apply_from_dir`, `paf_patch_apply_atomic` |
@@ -210,9 +201,9 @@ cl /O2 /LD /Fe:libpaf.dll "-DLIBPAF_EXPORTS" "-DPAF_CI_BUILD" /Ilibpaf/include /
 | `libpaf/include/paf_gpu.h` | `paf_gpu_direct_load`, `paf_gpu_direct_load_d3d12`, `paf_gpu_search_files` |
 | `libpaf/include/paf_vulkan.h` | `paf_vulkan_init`, `paf_vulkan_hash_flat`, `paf_vulkan_cleanup` |
 
-## デプロイ
+## Deployment
 
-タグ (`v*`) をプッシュすると GitHub Actions が Windows DLL、Linux .so、Android ARM64 `.so` をビルドし、[Releases](../../releases) ページに公開します。
+Pushing a tag (`v*`) triggers GitHub Actions to build Windows DLL, Linux .so, and Android ARM64 `.so`, then publishes them to the [Releases](../../releases) page.
 
 ---
 Developed by Antigravity AI & Team.
