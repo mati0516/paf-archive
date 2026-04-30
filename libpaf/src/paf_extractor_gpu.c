@@ -112,7 +112,10 @@ int paf_extractor_gpu_run(paf_extractor_t* ext,
     printf("Detected hardware : %s\n", gpu.device_name);
     printf("  VRAM            : %llu MB\n",
            (unsigned long long)(gpu.total_vram / 1024 / 1024));
-    printf("  GPU compute     : %s\n", paf_cuda_is_available() ? "CUDA" : "CPU fallback");
+    printf("  GPU compute     : %s\n",
+           paf_cuda_is_available()   ? "CUDA"
+         : paf_vulkan_is_available() ? "Vulkan"
+         : "CPU fallback");
     printf("  Fast I/O        : %s\n",
            paf_dstorage_is_available() ? "DirectStorage" : "fread");
     printf("Extracting %u file(s) to %s\n", ext->header.file_count, out_dir);
@@ -178,9 +181,12 @@ int paf_extractor_gpu_run(paf_extractor_t* ext,
             free(flat); free(paths); free(io_failed); free(offsets); free(sizes);
             return -1;
         }
+        // Phase 2: CUDA → Vulkan → CPU fallback
         int gpu_ok = total_size > 0 &&
-                     paf_cuda_is_available() && g_paf_cuda_hash_flat != NULL &&
-                     g_paf_cuda_hash_flat(flat, offsets, sizes, n, hashes) == 0;
+                     ((paf_cuda_is_available() && g_paf_cuda_hash_flat != NULL &&
+                       g_paf_cuda_hash_flat(flat, offsets, sizes, n, hashes) == 0)
+                    || (paf_vulkan_is_available() && g_paf_vulkan_hash_flat != NULL &&
+                        g_paf_vulkan_hash_flat(flat, offsets, sizes, n, hashes) == 0));
         if (!gpu_ok) {
             for (uint32_t i = 0; i < n; i++) {
                 if (sizes[i] == 0 || io_failed[i]) {

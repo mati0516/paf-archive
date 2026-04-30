@@ -109,6 +109,21 @@ int paf_gpu_direct_load(const char* path, uint64_t offset,
     return ok ? 0 : -1;
 }
 
+// paf_gpu_direct_load_d3d12: on Windows (non-CI) the real implementation lives in
+// win/paf_io_d3d12_direct.cpp and is compiled only for the full GPU build.
+// All other configurations use this stub.
+#if !defined(_WIN32) || defined(PAF_CI_BUILD)
+int paf_gpu_direct_load_d3d12(const char* path, uint64_t offset,
+                                uint64_t size,
+                                void* d3d12_device,
+                                void* d3d12_resource,
+                                uint64_t resource_offset) {
+    (void)path; (void)offset; (void)size;
+    (void)d3d12_device; (void)d3d12_resource; (void)resource_offset;
+    return -1;
+}
+#endif
+
 // Linear scan of all file paths in the archive against a fnmatch pattern.
 // Returns the number of matching entries written to out_indices.
 int paf_gpu_search_files(paf_extractor_t* ext, const char* pattern,

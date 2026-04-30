@@ -1,9 +1,14 @@
 #define LIBPAF_EXPORTS
 #include "paf_gpu_loader.h"
+#include "paf_vulkan.h"
 #include <stddef.h>
 #include <stdint.h>
 
-paf_cuda_hash_flat_fn g_paf_cuda_hash_flat = NULL;
+paf_cuda_hash_flat_fn   g_paf_cuda_hash_flat   = NULL;
+// paf_vulkan_hash_flat is a real function in paf_vulkan.c; point to it unconditionally.
+// paf_vulkan_hash_flat() returns -1 when Vulkan is unavailable, so the caller
+// always guards with paf_vulkan_is_available() before trusting the result.
+paf_vulkan_hash_flat_fn g_paf_vulkan_hash_flat = paf_vulkan_hash_flat;
 
 #if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
 #include <windows.h>
@@ -41,7 +46,13 @@ int paf_gpu_init(void) {
         FreeLibrary(hds);
     }
 
-    return (g_cuda_avail ? PAF_GPU_CUDA : 0) | (g_dstorage_avail ? PAF_GPU_DSTORAGE : 0);
+    /* --- Vulkan: probe now so the result feeds into the bitmask.
+         paf_vulkan_init() is idempotent; state lives in paf_vulkan.c. --- */
+    paf_vulkan_init();
+
+    return (g_cuda_avail     ? PAF_GPU_CUDA     : 0)
+         | (g_dstorage_avail ? PAF_GPU_DSTORAGE : 0)
+         | (paf_vulkan_is_available() ? PAF_GPU_VULKAN : 0);
 }
 
 int paf_cuda_is_available(void) {
@@ -56,9 +67,13 @@ int paf_dstorage_is_available(void) {
 
 #else
 
-/* Non-Windows platforms: no CUDA/DirectStorage support */
-int paf_gpu_init(void)           { return 0; }
-int paf_cuda_is_available(void)  { return 0; }
+/* Non-Windows platforms: Vulkan only (libvulkan.so.1 resolved at runtime) */
+int paf_gpu_init(void) {
+    paf_vulkan_init();
+    return paf_vulkan_is_available() ? PAF_GPU_VULKAN : 0;
+}
+
+int paf_cuda_is_available(void)     { return 0; }
 int paf_dstorage_is_available(void) { return 0; }
 
 #endif

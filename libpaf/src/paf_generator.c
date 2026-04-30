@@ -42,10 +42,13 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
     uint8_t* host_hashes = (uint8_t*)malloc(gen->batch_count * 32);
     if (!host_hashes) return -1;
     
-    // GPU path if paf_cuda.dll is loaded; CPU fallback otherwise
-    int gpu_done = paf_cuda_is_available() && g_paf_cuda_hash_flat != NULL &&
-                   g_paf_cuda_hash_flat(gen->batch_data_buffer, gen->batch_offsets,
-                                        gen->batch_sizes, gen->batch_count, host_hashes) == 0;
+    // GPU path: CUDA → Vulkan → CPU fallback
+    int gpu_done = (paf_cuda_is_available() && g_paf_cuda_hash_flat != NULL &&
+                    g_paf_cuda_hash_flat(gen->batch_data_buffer, gen->batch_offsets,
+                                         gen->batch_sizes, gen->batch_count, host_hashes) == 0)
+                || (paf_vulkan_is_available() && g_paf_vulkan_hash_flat != NULL &&
+                    g_paf_vulkan_hash_flat(gen->batch_data_buffer, gen->batch_offsets,
+                                           gen->batch_sizes, gen->batch_count, host_hashes) == 0);
     if (!gpu_done) {
         for (uint32_t i = 0; i < gen->batch_count; i++) {
             sha256_context_t sha_ctx;
