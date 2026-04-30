@@ -7,8 +7,6 @@
 
 using Microsoft::WRL::ComPtr;
 
-// DStorageGetFactory is resolved at runtime so the DLL can be loaded
-// without dstorage.lib being present at link time.
 typedef HRESULT (WINAPI *PFN_DSTORAGE_GET_FACTORY)(REFIID riid, void** ppv);
 
 static PFN_DSTORAGE_GET_FACTORY s_DStorageGetFactory = nullptr;
@@ -28,12 +26,13 @@ static bool LoadDStorageOnce() {
     return true;
 }
 
-static const DWORD DSTORAGE_WAIT_TIMEOUT_MS = 5000;
+// Capacity per sub-batch: leave 2 slots for status + event entries.
+static const uint32_t DS_BATCH_CAP = DSTORAGE_MAX_QUEUE_CAPACITY - 2;
 
 class PafDirectStorage {
-private:
     ComPtr<IDStorageFactory> m_factory;
     ComPtr<IDStorageQueue>   m_queue;
+    ComPtr<IDStorageQueue1>  m_queue1;   // non-null if SDK >= 1.1 (EnqueueSetEvent)
     ComPtr<IDStorageFile>    m_file;
     std::wstring             m_current_path;
 
@@ -44,6 +43,30 @@ private:
         return hr;
     }
 
+    // Submit one sub-batch of up to DS_BATCH_CAP already-enqueued requests and
+    // wait for completion.  Uses EnqueueSetEvent (zero-CPU-spin) when available,
+    // falls back to statusArray + Sleep(0) yield loop.
+    HRESULT SubmitAndWait() {
+        ComPtr<IDStorageStatusArray> status;
+        HRESULT hr = m_factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&status));
+        if (FAILED(hr)) return hr;
+        m_queue->EnqueueStatus(status.Get(), 0);
+
+        if (m_queue1) {
+            HANDLE hEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (!hEvent) return E_OUTOFMEMORY;
+            m_queue1->EnqueueSetEvent(hEvent);
+            m_queue->Submit();
+            WaitForSingleObject(hEvent, INFINITE);
+            CloseHandle(hEvent);
+        } else {
+            m_queue->Submit();
+            // Sleep(0) yields the time slice instead of burning 1ms per poll.
+            while (!status->IsComplete(0)) Sleep(0);
+        }
+        return status->GetHResult(0);
+    }
+
 public:
     HRESULT Initialize(const wchar_t* path) {
         if (!LoadDStorageOnce()) return E_NOTIMPL;
@@ -51,14 +74,17 @@ public:
         HRESULT hr = s_DStorageGetFactory(IID_PPV_ARGS(&m_factory));
         if (FAILED(hr)) return hr;
 
-        DSTORAGE_QUEUE_DESC queueDesc = {};
-        queueDesc.Capacity   = DSTORAGE_MAX_QUEUE_CAPACITY;
-        queueDesc.Priority   = DSTORAGE_PRIORITY_NORMAL;
-        queueDesc.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
-        queueDesc.Device     = nullptr;
+        DSTORAGE_QUEUE_DESC qd = {};
+        qd.Capacity   = DSTORAGE_MAX_QUEUE_CAPACITY;
+        qd.Priority   = DSTORAGE_PRIORITY_NORMAL;
+        qd.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
+        qd.Device     = nullptr;
 
-        hr = m_factory->CreateQueue(&queueDesc, IID_PPV_ARGS(&m_queue));
+        hr = m_factory->CreateQueue(&qd, IID_PPV_ARGS(&m_queue));
         if (FAILED(hr)) return hr;
+
+        // Opportunistically get IDStorageQueue1 (SDK >= 1.1) for EnqueueSetEvent.
+        m_queue.As(&m_queue1);
 
         return OpenFile(path);
     }
@@ -70,46 +96,85 @@ public:
         return S_OK;
     }
 
-    HRESULT EnqueueAndWait(uint64_t offset, uint32_t size, void* destination) {
-        DSTORAGE_REQUEST request = {};
-        request.Options.SourceType      = DSTORAGE_REQUEST_SOURCE_FILE;
-        request.Options.DestinationType = DSTORAGE_REQUEST_DESTINATION_MEMORY;
-        request.Source.File.Source      = m_file.Get();
-        request.Source.File.Offset      = offset;
-        request.Source.File.Size        = size;
-        request.Destination.Memory.Buffer = destination;
-        request.Destination.Memory.Size   = size;
+    // Load a batch of N file regions into flat[dst_offsets[i]..].
+    // Enqueues DS_BATCH_CAP requests at a time, submitting + waiting between
+    // sub-batches so we never overflow the queue.
+    // io_failed[i] is set to 1 on per-sub-batch failure (coarse granularity).
+    HRESULT LoadBatch(const uint64_t* paf_offsets, const uint64_t* sizes,
+                      uint8_t* flat, const uint64_t* dst_offsets,
+                      uint32_t count, uint8_t* io_failed)
+    {
+        for (uint32_t base = 0; base < count; ) {
+            uint32_t n = count - base;
+            if (n > DS_BATCH_CAP) n = DS_BATCH_CAP;
 
-        m_queue->EnqueueRequest(&request);
+            uint32_t enqueued = 0;
+            for (uint32_t i = 0; i < n; i++) {
+                if (sizes[base + i] == 0) continue;
+                DSTORAGE_REQUEST req = {};
+                req.Options.SourceType      = DSTORAGE_REQUEST_SOURCE_FILE;
+                req.Options.DestinationType = DSTORAGE_REQUEST_DESTINATION_MEMORY;
+                req.Source.File.Source      = m_file.Get();
+                req.Source.File.Offset      = paf_offsets[base + i];
+                req.Source.File.Size        = (UINT32)sizes[base + i];
+                req.Destination.Memory.Buffer = flat + dst_offsets[base + i];
+                req.Destination.Memory.Size   = (UINT32)sizes[base + i];
+                m_queue->EnqueueRequest(&req);
+                enqueued++;
+            }
 
-        ComPtr<IDStorageStatusArray> statusArray;
-        HRESULT hr = m_factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&statusArray));
-        if (FAILED(hr)) return hr;
-
-        m_queue->EnqueueStatus(statusArray.Get(), 0);
-        m_queue->Submit();
-
-        DWORD elapsed = 0;
-        while (!statusArray->IsComplete(0)) {
-            if (elapsed >= DSTORAGE_WAIT_TIMEOUT_MS) return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
-            Sleep(1);
-            elapsed++;
+            if (enqueued > 0) {
+                HRESULT hr = SubmitAndWait();
+                if (FAILED(hr)) {
+                    for (uint32_t i = 0; i < n; i++)
+                        io_failed[base + i] = 1;
+                }
+            }
+            base += n;
         }
-
-        return statusArray->GetHResult(0);
+        return S_OK;
     }
 };
+
+// ─── Single-file API (kept for compatibility) ────────────────────────────────
 
 extern "C" int paf_io_directstorage_load(const wchar_t* path, uint64_t offset,
                                           uint64_t size, void* destination) {
     static PafDirectStorage ds;
-
     if (!ds.IsInitialized()) {
         if (FAILED(ds.Initialize(path))) return -1;
     } else {
         if (FAILED(ds.EnsureFile(path))) return -1;
     }
-
-    return SUCCEEDED(ds.EnqueueAndWait(offset, (uint32_t)size, destination)) ? 0 : -1;
+    uint64_t dst_off = 0;
+    uint8_t  failed  = 0;
+    return SUCCEEDED(ds.LoadBatch(&offset, &size,
+                                  (uint8_t*)destination, &dst_off,
+                                  1, &failed)) && !failed ? 0 : -1;
 }
-#endif
+
+// ─── Batch API: N regions → flat buffer ────────────────────────────────────
+// paf_offsets[i] : absolute byte offset within the PAF file
+// sizes[i]       : byte count to read (0 entries are skipped)
+// flat           : contiguous destination buffer
+// dst_offsets[i] : byte offset within flat for file i
+// io_failed[i]   : set to 1 on failure (output, must be zero-initialised by caller)
+
+extern "C" int paf_io_directstorage_load_batch(const wchar_t* path,
+                                                const uint64_t* paf_offsets,
+                                                const uint64_t* sizes,
+                                                uint8_t* flat,
+                                                const uint64_t* dst_offsets,
+                                                uint32_t count,
+                                                uint8_t* io_failed) {
+    static PafDirectStorage ds_batch;
+    if (!ds_batch.IsInitialized()) {
+        if (FAILED(ds_batch.Initialize(path))) return -1;
+    } else {
+        if (FAILED(ds_batch.EnsureFile(path))) return -1;
+    }
+    return SUCCEEDED(ds_batch.LoadBatch(paf_offsets, sizes, flat,
+                                        dst_offsets, count, io_failed)) ? 0 : -1;
+}
+
+#endif // _WIN32

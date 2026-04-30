@@ -17,28 +17,42 @@
 #define MKDIR(p) mkdir(p, 0755)
 #endif
 
-// DirectStorage I/O backend. Non-Windows / CI builds use a stub.
+// ── Platform I/O declarations ─────────────────────────────────────────────────
+
 #if defined(_WIN32) && !defined(PAF_CI_BUILD)
 int paf_io_directstorage_load(const wchar_t* path, uint64_t offset,
                                uint64_t size, void* destination);
+int paf_io_directstorage_load_batch(const wchar_t* path,
+                                    const uint64_t* paf_offsets,
+                                    const uint64_t* sizes,
+                                    uint8_t* flat,
+                                    const uint64_t* dst_offsets,
+                                    uint32_t count,
+                                    uint8_t* io_failed);
 #else
-static int paf_io_directstorage_load(const void* path, uint64_t offset,
-                                      uint64_t size, void* destination) {
-    (void)path; (void)offset; (void)size; (void)destination;
-    return -1;
+static int paf_io_directstorage_load(const void* p, uint64_t o,
+                                     uint64_t s, void* d) {
+    (void)p;(void)o;(void)s;(void)d; return -1;
+}
+static int paf_io_directstorage_load_batch(const void* p,
+                                           const uint64_t* o,
+                                           const uint64_t* s,
+                                           uint8_t* f,
+                                           const uint64_t* d,
+                                           uint32_t c,
+                                           uint8_t* e) {
+    (void)p;(void)o;(void)s;(void)f;(void)d;(void)c;(void)e; return -1;
 }
 #endif
 
-// ── Internal helpers ─────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 static int is_safe_path(const char* path) {
     if (!path || path[0] == '/' || path[0] == '\\') return 0;
-    const char* p = path;
-    while (*p) {
+    for (const char* p = path; *p; p++) {
         if (p[0] == '.' && p[1] == '.') {
             if (p[2] == '/' || p[2] == '\\' || p[2] == '\0') return 0;
         }
-        p++;
     }
     return 1;
 }
@@ -49,9 +63,7 @@ static void ensure_dir(const char* full_path) {
     buf[sizeof(buf) - 1] = '\0';
     for (char* p = buf + 1; *p; ++p) {
         if (*p == '/' || *p == '\\') {
-            *p = '\0';
-            MKDIR(buf);
-            *p = '/';
+            *p = '\0'; MKDIR(buf); *p = '/';
         }
     }
 }
@@ -67,41 +79,188 @@ static int read_entry_path(paf_extractor_t* ext, uint32_t idx,
     return 0;
 }
 
-// Load entry data using DirectStorage when available, fread otherwise.
-static int load_entry_data(const char* paf_path,
-                            const paf_index_entry_t* entry,
-                            uint8_t* dst) {
-    if (entry->data_size == 0) return 0;
-    uint64_t offset = sizeof(paf_header_t) + entry->data_offset;
+// ── Phase 1: Batch I/O ────────────────────────────────────────────────────────
+// Loads all n files in one pass.
+// DS path: enqueues all requests and submits once per DS_BATCH_CAP entries.
+// fread path: opens the PAF file once and fseeks per entry.
 
+static void phase1_io(paf_extractor_t* ext,
+                      const char* paf_path,
+                      uint32_t processed, uint32_t n,
+                      const uint64_t* offsets,   // flat dst offsets
+                      const uint64_t* sizes,
+                      uint8_t* flat,
+                      uint8_t* io_failed)
+{
 #if defined(_WIN32) && !defined(PAF_CI_BUILD)
     if (paf_dstorage_is_available()) {
-        wchar_t wpath[1024];
-        mbstowcs(wpath, paf_path, sizeof(wpath) / sizeof(wpath[0]) - 1);
-        wpath[sizeof(wpath) / sizeof(wpath[0]) - 1] = L'\0';
-        if (paf_io_directstorage_load(wpath, offset, entry->data_size, dst) == 0)
-            return 0;
-        // fall through to fread on DirectStorage failure
+        // Build per-entry absolute PAF offsets for the batch DS call.
+        uint64_t* paf_offs = (uint64_t*)malloc(n * sizeof(uint64_t));
+        if (paf_offs) {
+            for (uint32_t i = 0; i < n; i++)
+                paf_offs[i] = sizeof(paf_header_t) +
+                              ext->entries[processed + i].data_offset;
+
+            wchar_t wpath[1024];
+            mbstowcs(wpath, paf_path, sizeof(wpath)/sizeof(wpath[0]) - 1);
+            wpath[sizeof(wpath)/sizeof(wpath[0]) - 1] = L'\0';
+
+            if (paf_io_directstorage_load_batch(wpath, paf_offs, sizes,
+                                                flat, offsets, n, io_failed) == 0) {
+                free(paf_offs);
+                return;
+            }
+            free(paf_offs);
+        }
+        // Fall through to fread on DS failure.
     }
 #else
-    (void)paf_path;
+    (void)paf_path; // suppress unused warning on non-Windows; handled below
 #endif
 
+    // fread fallback: open once, seek per entry.
     FILE* fp = fopen(paf_path, "rb");
-    if (!fp) return -1;
-    int ok = fseek(fp, (long)offset, SEEK_SET) == 0 &&
-             fread(dst, 1, (size_t)entry->data_size, fp) == (size_t)entry->data_size;
+    if (!fp) {
+        memset(io_failed, 1, n);
+        return;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        if (sizes[i] == 0) continue;
+        long pos = (long)(sizeof(paf_header_t) +
+                         ext->entries[processed + i].data_offset);
+        if (fseek(fp, pos, SEEK_SET) != 0 ||
+            fread(flat + offsets[i], 1, (size_t)sizes[i], fp) != (size_t)sizes[i])
+            io_failed[i] = 1;
+    }
     fclose(fp);
-    return ok ? 0 : -1;
 }
 
-// ── Public API ───────────────────────────────────────────────────────────────
+// ── Phase 3: Parallel file write (Windows thread pool / sequential fallback) ──
 
-// GPU-accelerated batch extraction.
-// Phase 1 : I/O    — load each batch into a flat contiguous buffer
-//                    (DirectStorage → fread fallback)
-// Phase 2 : Compute — SHA-256 batch hash (GPU → CPU fallback)
-// Phase 3 : Write  — verify hash then write to out_dir
+#if defined(_WIN32) && !defined(PAF_CI_BUILD)
+
+typedef struct {
+    const uint8_t*  data;
+    uint64_t        size;
+    char            path[2048];
+    volatile LONG*  pending;
+    HANDLE          done;
+    volatile LONG*  errors;
+} write_item_t;
+
+static DWORD WINAPI write_worker(LPVOID arg) {
+    write_item_t* item = (write_item_t*)arg;
+    FILE* fp = fopen(item->path, "wb");
+    if (!fp) {
+        InterlockedIncrement(item->errors);
+    } else {
+        if (item->size > 0 &&
+            fwrite(item->data, 1, (size_t)item->size, fp) != (size_t)item->size)
+            InterlockedIncrement(item->errors);
+        fclose(fp);
+    }
+    if (InterlockedDecrement(item->pending) == 0)
+        SetEvent(item->done);
+    free(item);
+    return 0;
+}
+
+static uint32_t phase3_write_parallel(
+        uint32_t n, const char (*paths)[1024],
+        const uint8_t* io_failed, const uint8_t* hash_ok,
+        const uint64_t* offsets, const uint64_t* sizes,
+        const uint8_t* flat, const char* out_dir)
+{
+    volatile LONG pending = 1; // sentinel: prevents premature signal
+    volatile LONG write_errors = 0;
+    HANDLE hDone = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (!hDone) {
+        // Fallback to sequential if event creation fails
+        goto sequential;
+    }
+
+    for (uint32_t i = 0; i < n; i++) {
+        if (io_failed[i] || !hash_ok[i] || paths[i][0] == '\0') continue;
+
+        char out_path[2048];
+        if (snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, paths[i]) >=
+            (int)sizeof(out_path)) continue;
+        ensure_dir(out_path);
+
+        write_item_t* item = (write_item_t*)malloc(sizeof(write_item_t));
+        if (!item) { InterlockedIncrement(&write_errors); continue; }
+        item->data    = flat + offsets[i];
+        item->size    = sizes[i];
+        item->pending = &pending;
+        item->done    = hDone;
+        item->errors  = &write_errors;
+        strncpy(item->path, out_path, sizeof(item->path) - 1);
+        item->path[sizeof(item->path) - 1] = '\0';
+
+        InterlockedIncrement(&pending);
+        if (!QueueUserWorkItem(write_worker, item, WT_EXECUTEDEFAULT)) {
+            InterlockedDecrement(&pending);
+            InterlockedIncrement(&write_errors);
+            free(item);
+        }
+    }
+
+    // Release sentinel; if all workers already finished, signal now.
+    if (InterlockedDecrement(&pending) > 0)
+        WaitForSingleObject(hDone, INFINITE);
+    CloseHandle(hDone);
+    return (uint32_t)write_errors;
+
+sequential:
+    if (hDone) CloseHandle(hDone);
+    {
+        uint32_t errs = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            if (io_failed[i] || !hash_ok[i] || paths[i][0] == '\0') continue;
+            char out_path[2048];
+            if (snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, paths[i]) >=
+                (int)sizeof(out_path)) continue;
+            ensure_dir(out_path);
+            FILE* fp = fopen(out_path, "wb");
+            if (!fp) { errs++; continue; }
+            if (sizes[i] > 0 &&
+                fwrite(flat + offsets[i], 1, (size_t)sizes[i], fp) != (size_t)sizes[i])
+                errs++;
+            fclose(fp);
+        }
+        return errs;
+    }
+}
+
+#else // non-Windows
+
+static uint32_t phase3_write_parallel(
+        uint32_t n, const char (*paths)[1024],
+        const uint8_t* io_failed, const uint8_t* hash_ok,
+        const uint64_t* offsets, const uint64_t* sizes,
+        const uint8_t* flat, const char* out_dir)
+{
+    uint32_t errs = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (io_failed[i] || !hash_ok[i] || paths[i][0] == '\0') continue;
+        char out_path[2048];
+        if (snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, paths[i]) >=
+            (int)sizeof(out_path)) continue;
+        ensure_dir(out_path);
+        FILE* fp = fopen(out_path, "wb");
+        if (!fp) { errs++; continue; }
+        if (sizes[i] > 0 &&
+            fwrite(flat + offsets[i], 1, (size_t)sizes[i], fp) != (size_t)sizes[i])
+            errs++;
+        fclose(fp);
+    }
+    return errs;
+}
+
+#endif
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
 int paf_extractor_gpu_run(paf_extractor_t* ext,
                            const char* paf_path,
                            const char* out_dir) {
@@ -117,7 +276,7 @@ int paf_extractor_gpu_run(paf_extractor_t* ext,
          : paf_vulkan_is_available() ? "Vulkan"
          : "CPU fallback");
     printf("  Fast I/O        : %s\n",
-           paf_dstorage_is_available() ? "DirectStorage" : "fread");
+           paf_dstorage_is_available() ? "DirectStorage (batch)" : "fread");
     printf("Extracting %u file(s) to %s\n", ext->header.file_count, out_dir);
 
     paf_batch_config_t batch = paf_gpu_calculate_batch(
@@ -131,105 +290,83 @@ int paf_extractor_gpu_run(paf_extractor_t* ext,
         uint32_t n = ext->header.file_count - processed;
         if (n > batch.files_per_batch) n = batch.files_per_batch;
 
-        // Pre-pass: resolve file paths for this batch
-        char (*paths)[1024] = (char (*)[1024])calloc(n, sizeof(*paths));
-        uint8_t* io_failed  = (uint8_t*)calloc(n, 1);
-        if (!paths || !io_failed) {
-            free(paths); free(io_failed);
+        // Allocate per-batch metadata arrays.
+        char     (*paths)[1024] = (char (*)[1024])calloc(n, sizeof(*paths));
+        uint8_t*   io_failed    = (uint8_t*)calloc(n, 1);
+        uint8_t*   hash_ok      = (uint8_t*)calloc(n, 1);
+        uint64_t*  offsets      = (uint64_t*)malloc(n * sizeof(uint64_t));
+        uint64_t*  sizes        = (uint64_t*)malloc(n * sizeof(uint64_t));
+        uint8_t*   hashes       = (uint8_t*)malloc(n * 32);
+
+        if (!paths || !io_failed || !hash_ok || !offsets || !sizes || !hashes) {
+            free(paths); free(io_failed); free(hash_ok);
+            free(offsets); free(sizes); free(hashes);
             return -1;
         }
+
+        // Pre-pass: resolve paths and build flat-buffer layout.
+        uint64_t total_size = 0;
         for (uint32_t i = 0; i < n; i++) {
             if (read_entry_path(ext, processed + i, paths[i], 1024) != 0 ||
                 !is_safe_path(paths[i]))
                 paths[i][0] = '\0';
-        }
-
-        // Build flat buffer layout
-        uint64_t* offsets = (uint64_t*)malloc(n * sizeof(uint64_t));
-        uint64_t* sizes   = (uint64_t*)malloc(n * sizeof(uint64_t));
-        if (!offsets || !sizes) {
-            free(paths); free(io_failed); free(offsets); free(sizes);
-            return -1;
-        }
-        uint64_t total_size = 0;
-        for (uint32_t i = 0; i < n; i++) {
             offsets[i]  = total_size;
             sizes[i]    = ext->entries[processed + i].data_size;
             total_size += sizes[i];
         }
 
-        // Phase 1: I/O — calloc so I/O-failed slots are zero-filled
+        // Phase 1: I/O — batch DirectStorage or sequential fread.
         uint8_t* flat = total_size > 0 ? (uint8_t*)calloc(1, (size_t)total_size) : NULL;
         if (total_size > 0 && !flat) {
-            free(paths); free(io_failed); free(offsets); free(sizes);
+            free(paths); free(io_failed); free(hash_ok);
+            free(offsets); free(sizes); free(hashes);
             return -1;
-        }
-        for (uint32_t i = 0; i < n; i++) {
-            if (sizes[i] == 0) continue;
-            if (load_entry_data(paf_path, &ext->entries[processed + i],
-                                flat + offsets[i]) != 0) {
-                fprintf(stderr, "error: I/O failed for entry %u (%s)\n",
-                        processed + i, paths[i]);
-                io_failed[i] = 1;
-                io_errors++;
-            }
         }
 
-        // Phase 2: Compute — batch SHA-256 (GPU → CPU fallback)
-        uint8_t* hashes = (uint8_t*)malloc(n * 32);
-        if (!hashes) {
-            free(flat); free(paths); free(io_failed); free(offsets); free(sizes);
-            return -1;
+        phase1_io(ext, paf_path, processed, n, offsets, sizes, flat, io_failed);
+
+        for (uint32_t i = 0; i < n; i++) {
+            if (io_failed[i]) io_errors++;
         }
-        // Phase 2: CUDA → Vulkan → CPU fallback
+
+        // Phase 2: SHA-256 — GPU (CUDA → Vulkan) → CPU fallback.
         int gpu_ok = total_size > 0 &&
-                     ((paf_cuda_is_available() && g_paf_cuda_hash_flat != NULL &&
+                     ((paf_cuda_is_available()   && g_paf_cuda_hash_flat &&
                        g_paf_cuda_hash_flat(flat, offsets, sizes, n, hashes) == 0)
-                    || (paf_vulkan_is_available() && g_paf_vulkan_hash_flat != NULL &&
-                        g_paf_vulkan_hash_flat(flat, offsets, sizes, n, hashes) == 0));
+                   || (paf_vulkan_is_available() && g_paf_vulkan_hash_flat &&
+                       g_paf_vulkan_hash_flat(flat, offsets, sizes, n, hashes) == 0));
         if (!gpu_ok) {
             for (uint32_t i = 0; i < n; i++) {
                 if (sizes[i] == 0 || io_failed[i]) {
-                    memset(hashes + i * 32, 0, 32);
-                    continue;
+                    memset(hashes + i * 32, 0, 32); continue;
                 }
                 paf_sha256_compute(flat + offsets[i], (size_t)sizes[i], hashes + i * 32);
             }
         }
 
-        // Phase 3: Verify hash then write to out_dir
+        // Verify hashes.
         for (uint32_t i = 0; i < n; i++) {
-            if (io_failed[i] || paths[i][0] == '\0') continue;
-
-            const paf_index_entry_t* entry = &ext->entries[processed + i];
-
-            if (memcmp(hashes + i * 32, entry->hash, 32) != 0) {
+            if (io_failed[i]) continue;
+            if (memcmp(hashes + i * 32, ext->entries[processed + i].hash, 32) != 0) {
                 fprintf(stderr, "error: hash mismatch for entry %u (%s)\n",
                         processed + i, paths[i]);
                 hash_errors++;
-                continue;
+            } else {
+                hash_ok[i] = 1;
             }
-
-            char out_path[2048];
-            if (snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, paths[i]) >=
-                (int)sizeof(out_path))
-                continue;
-            ensure_dir(out_path);
-
-            FILE* fp = fopen(out_path, "wb");
-            if (!fp) { io_errors++; continue; }
-            if (sizes[i] > 0 &&
-                fwrite(flat + offsets[i], 1, (size_t)sizes[i], fp) != (size_t)sizes[i])
-                io_errors++;
-            fclose(fp);
         }
+
+        // Phase 3: Write verified files (parallel on Windows, sequential elsewhere).
+        io_errors += phase3_write_parallel(n, paths, io_failed, hash_ok,
+                                           offsets, sizes, flat, out_dir);
 
         free(flat);
         free(hashes);
         free(offsets);
         free(sizes);
-        free(paths);
         free(io_failed);
+        free(hash_ok);
+        free(paths);
 
         processed += n;
         printf("  %u / %u files done\n", processed, ext->header.file_count);
