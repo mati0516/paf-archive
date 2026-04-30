@@ -193,8 +193,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Test binaries and outputs
-test/
+# Test binaries and outputs (*.c source files are tracked)
+test/*
+!test/*.c
 /test_paf
 /test_paf_ext
 /test_paf2*

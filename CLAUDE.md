@@ -79,7 +79,5 @@ Both DirectStorage files load `dstorage.dll` at runtime — `dstorage.lib` is **
 
 ## Known Gaps
 
-- `paf_gpu_search_files` — declared in `paf_gpu.h`, not yet implemented.
-- `paf_gpu_direct_load` — NVMe→GPU direct path; current implementation is a stub returning 0.
 - Vulkan compute path — `paf_gpu_info_t.supports_vulkan` is detected but no Vulkan SHA-256 kernel exists; only CUDA is wired into the hash pipeline.
-- CI (`build.yml`) compiles but does not run tests.
+- `paf_gpu_direct_load` — loads to host-accessible memory via DirectStorage/fread. True NVMe→GPU direct path requires a D3D12 resource destination and is not yet implemented.
