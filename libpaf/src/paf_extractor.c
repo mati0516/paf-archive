@@ -1,6 +1,6 @@
 #define LIBPAF_EXPORTS
 #include "paf_extractor.h"
-#include "sha256.h"
+#include "paf_sha256_hw.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -108,10 +108,7 @@ int paf_extractor_get_file(paf_extractor_t* ext, uint32_t index, char* out_path,
                 if (temp_buf) {
                     fread(temp_buf, 1, (size_t)entry->data_size, existing_fp);
                     uint8_t current_hash[32];
-                    sha256_context_t sha_ctx;
-                    sha256_init(&sha_ctx);
-                    sha256_update(&sha_ctx, temp_buf, (size_t)entry->data_size);
-                    sha256_final(&sha_ctx, current_hash);
+                    paf_sha256_compute(temp_buf, (size_t)entry->data_size, current_hash);
                     free(temp_buf);
                     
                     if (memcmp(current_hash, entry->hash, 32) == 0) {

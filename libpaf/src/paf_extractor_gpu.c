@@ -2,7 +2,7 @@
 #include "paf_extractor.h"
 #include "paf_gpu.h"
 #include "paf_gpu_loader.h"
-#include "sha256.h"
+#include "paf_sha256_hw.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -193,10 +193,7 @@ int paf_extractor_gpu_run(paf_extractor_t* ext,
                     memset(hashes + i * 32, 0, 32);
                     continue;
                 }
-                sha256_context_t ctx;
-                sha256_init(&ctx);
-                sha256_update(&ctx, flat + offsets[i], (size_t)sizes[i]);
-                sha256_final(&ctx, hashes + i * 32);
+                paf_sha256_compute(flat + offsets[i], (size_t)sizes[i], hashes + i * 32);
             }
         }
 

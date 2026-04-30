@@ -1,6 +1,7 @@
 #define LIBPAF_EXPORTS
 #include "paf_generator.h"
 #include "paf_gpu_loader.h"
+#include "paf_sha256_hw.h"
 #include "sha256.h"
 #include <stdlib.h>
 #include <string.h>
@@ -51,10 +52,9 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
                                            gen->batch_sizes, gen->batch_count, host_hashes) == 0);
     if (!gpu_done) {
         for (uint32_t i = 0; i < gen->batch_count; i++) {
-            sha256_context_t sha_ctx;
-            sha256_init(&sha_ctx);
-            sha256_update(&sha_ctx, gen->batch_data_buffer + gen->batch_offsets[i], (size_t)gen->batch_sizes[i]);
-            sha256_final(&sha_ctx, host_hashes + (i * 32));
+            paf_sha256_compute(gen->batch_data_buffer + gen->batch_offsets[i],
+                               (size_t)gen->batch_sizes[i],
+                               host_hashes + (i * 32));
         }
     }
 
@@ -109,10 +109,7 @@ int paf_generator_add_file(paf_generator_t* gen, const char* path, const uint8_t
                 int gpu_done = paf_cuda_is_available() && g_paf_cuda_hash_flat != NULL &&
                                g_paf_cuda_hash_flat(data, &offset_val, &size, 1, entry.hash) == 0;
                 if (!gpu_done) {
-                    sha256_context_t sha_ctx;
-                    sha256_init(&sha_ctx);
-                    sha256_update(&sha_ctx, data, (size_t)size);
-                    sha256_final(&sha_ctx, entry.hash);
+                    paf_sha256_compute(data, (size_t)size, entry.hash);
                 }
             }
             
