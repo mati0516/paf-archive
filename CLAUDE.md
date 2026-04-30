@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Linux / CI (CPU only)
 ```sh
-gcc -O2 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -o libpaf.so
+gcc -O2 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -lpthread -o libpaf.so
 ```
-This is the canonical quick-check build. All `.c` files in `libpaf/src/` are compiled together; the Windows-specific `.cpp` and `.cu` files are excluded automatically.
+This is the canonical quick-check build. All `.c` files in `libpaf/src/` are compiled together; the Windows-specific `.cpp` and `.cu` files are excluded automatically. `-lpthread` is required for `phase3_write_parallel` (parallel file write on Linux).
 
 ### Windows — CPU only (matches CI)
 ```bat

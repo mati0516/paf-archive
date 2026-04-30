@@ -214,7 +214,48 @@ sequential:
     }
 }
 
-#else // non-Windows
+#else // non-Windows: pthreads pool
+
+#include <pthread.h>
+
+#define WRITE_THREADS_MAX 16
+
+typedef struct {
+    uint32_t           n;
+    const char       (*paths)[1024];
+    const uint8_t*    io_failed;
+    const uint8_t*    hash_ok;
+    const uint64_t*   offsets;
+    const uint64_t*   sizes;
+    const uint8_t*    flat;
+    const char*       out_dir;
+    volatile uint32_t next;   // atomic work index
+    volatile uint32_t errors; // atomic error count
+} posix_pool_t;
+
+static void* write_thread_fn(void* arg) {
+    posix_pool_t* p = (posix_pool_t*)arg;
+    for (;;) {
+        uint32_t i = __atomic_fetch_add(&p->next, 1u, __ATOMIC_RELAXED);
+        if (i >= p->n) break;
+        if (p->io_failed[i] || !p->hash_ok[i] || p->paths[i][0] == '\0') continue;
+        char out_path[2048];
+        if (snprintf(out_path, sizeof(out_path), "%s/%s",
+                     p->out_dir, p->paths[i]) >= (int)sizeof(out_path)) continue;
+        ensure_dir(out_path);
+        FILE* fp = fopen(out_path, "wb");
+        if (!fp) {
+            __atomic_fetch_add(&p->errors, 1u, __ATOMIC_RELAXED);
+            continue;
+        }
+        if (p->sizes[i] > 0 &&
+            fwrite(p->flat + p->offsets[i], 1, (size_t)p->sizes[i], fp) !=
+            (size_t)p->sizes[i])
+            __atomic_fetch_add(&p->errors, 1u, __ATOMIC_RELAXED);
+        fclose(fp);
+    }
+    return NULL;
+}
 
 static uint32_t phase3_write_parallel(
         uint32_t n, const char (*paths)[1024],
@@ -222,21 +263,26 @@ static uint32_t phase3_write_parallel(
         const uint64_t* offsets, const uint64_t* sizes,
         const uint8_t* flat, const char* out_dir)
 {
-    uint32_t errs = 0;
-    for (uint32_t i = 0; i < n; i++) {
-        if (io_failed[i] || !hash_ok[i] || paths[i][0] == '\0') continue;
-        char out_path[2048];
-        if (snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, paths[i]) >=
-            (int)sizeof(out_path)) continue;
-        ensure_dir(out_path);
-        FILE* fp = fopen(out_path, "wb");
-        if (!fp) { errs++; continue; }
-        if (sizes[i] > 0 &&
-            fwrite(flat + offsets[i], 1, (size_t)sizes[i], fp) != (size_t)sizes[i])
-            errs++;
-        fclose(fp);
+    if (n == 0) return 0;
+
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    int nt = (ncpu > 1) ? (int)ncpu : 1;
+    if (nt > WRITE_THREADS_MAX) nt = WRITE_THREADS_MAX;
+    if (nt > (int)n)            nt = (int)n;
+
+    posix_pool_t pool = { n, paths, io_failed, hash_ok,
+                          offsets, sizes, flat, out_dir, 0, 0 };
+
+    pthread_t threads[WRITE_THREADS_MAX];
+    int created = 0;
+    for (int t = 0; t < nt; t++) {
+        if (pthread_create(&threads[t], NULL, write_thread_fn, &pool) == 0)
+            created++;
     }
-    return errs;
+    for (int t = 0; t < created; t++)
+        pthread_join(threads[t], NULL);
+
+    return pool.errors;
 }
 
 #endif
