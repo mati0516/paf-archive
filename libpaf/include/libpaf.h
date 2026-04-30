@@ -15,7 +15,6 @@ typedef struct {
     char path[1024];       // UTF-8 file path (null-terminated)
     uint32_t size;         // File size in bytes
     uint32_t offset;       // Offset to the file data inside .paf
-    uint32_t crc32;        // CRC32 checksum of the file
     uint8_t hash[32];      // SHA-256 hash
 } PafEntry;
 

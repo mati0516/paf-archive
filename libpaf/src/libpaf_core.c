@@ -61,7 +61,6 @@ typedef struct {
     char* path;
     uint32_t size;
     uint32_t offset;
-    uint32_t crc32;
 } FileEntry;
 
 typedef struct {
@@ -146,7 +145,6 @@ static int collect_files_binary(const char* base_dir, const char* rel_path,
             fe.path = strdup(child_rel);
             fe.size = (uint32_t)st.st_size;
             fe.offset = 0;
-            fe.crc32 = 0;
 
             if (*out_count % 64 == 0) {
                 FileEntry* tmp = realloc(*out_entries, sizeof(FileEntry) * (*out_count + 64));

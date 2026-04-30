@@ -37,7 +37,6 @@ int paf_list_binary(const char* paf_path, PafList* out_list) {
         
         out_list->entries[i].size = (uint32_t)idx_table[i].data_size;
         out_list->entries[i].offset = (uint32_t)idx_table[i].data_offset;
-        out_list->entries[i].crc32 = idx_table[i].flags;
         memcpy(out_list->entries[i].hash, idx_table[i].hash, 32);
     }
 
