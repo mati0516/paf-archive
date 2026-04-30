@@ -9,6 +9,10 @@
 #define PAF_EXTRACT_SMART_OVERWRITE 0x01
 #define PAF_FLAG_INDEX_ONLY         0x02
 
+// Per-entry flags (paf_index_entry_t.flags)
+#define PAF_ENTRY_DELETED           0x04   // File deleted; no data block
+#define PAF_ENTRY_BINARY_DELTA      0x08   // Data block is a binary delta (paf_bdelta format)
+
 #ifdef _WIN32
   #ifdef LIBPAF_EXPORTS
     #define PAF_API __declspec(dllexport)

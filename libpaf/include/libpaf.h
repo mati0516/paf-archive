@@ -56,6 +56,14 @@ PAF_API int file_exists_in_archive(const char* paf_path, const char* internal_pa
 // Check if a folder (prefix) exists in the archive
 PAF_API int folder_exists_in_archive(const char* paf_path, const char* internal_dir);
 
+// Create a compact patch PAF from old_dir → new_dir.
+// ADDED entries carry full file data; UPDATED entries carry a binary delta
+// (PAF_ENTRY_BINARY_DELTA); DELETED entries have no data (PAF_ENTRY_DELETED).
+// Apply with paf_patch_apply_atomic().
+PAF_API int paf_create_patch(const char* old_dir, const char* new_dir,
+                              const char* out_paf,
+                              paf_progress_fn progress, void* user_data);
+
 #ifdef __cplusplus
 }
 #endif

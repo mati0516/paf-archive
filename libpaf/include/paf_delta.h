@@ -74,6 +74,24 @@ PAF_API int paf_patch_apply(const char* new_paf_path, const paf_delta_t* delta, 
 // Apply delta by copying files directly from a source directory (no PAF required).
 PAF_API int paf_patch_apply_from_dir(const char* new_src_dir, const paf_delta_t* delta, const char* dst_dir, paf_progress_fn progress, void* user_data);
 
+/**
+ * アトミックパッチ適用 — paf_create_patch() が生成したパッチ PAF を dst_dir に適用する。
+ *
+ * - PAF_ENTRY_DELETED      : dst_dir 内の該当ファイルを削除
+ * - PAF_ENTRY_BINARY_DELTA : バイナリデルタを適用、SHA-256 検証後にアトミックリネーム
+ * - 通常エントリ           : 展開→SHA-256 検証→アトミックリネーム
+ *
+ * ステージングファイル (.paf_stage 拡張子) を使うため、書き込み途中でも既存ファイルは壊れない。
+ *
+ * @param patch_paf  paf_create_patch() で生成したパッチ PAF のパス
+ * @param dst_dir    適用先ディレクトリ
+ * @param progress   進捗コールバック（不要なら NULL）
+ * @param user_data  コールバックに渡すユーザーデータ
+ * @return 0: 成功, その他: 失敗（絶対値 = エラー数）
+ */
+PAF_API int paf_patch_apply_atomic(const char* patch_paf, const char* dst_dir,
+                                    paf_progress_fn progress, void* user_data);
+
 #ifdef __cplusplus
 }
 #endif
