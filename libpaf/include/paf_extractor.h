@@ -40,6 +40,17 @@ PAF_API int paf_extractor_get_file(paf_extractor_t* ext, uint32_t index, char* o
  */
 PAF_API void paf_extractor_close(paf_extractor_t* ext);
 
+/**
+ * GPU-accelerated batch extraction.
+ * Loads files in batches using DirectStorage (Windows) or fread, verifies
+ * SHA-256 hashes via CUDA when paf_cuda.dll is present, then writes
+ * verified files under out_dir.
+ * Returns 0 on success, negative error count on failure.
+ */
+PAF_API int paf_extractor_gpu_run(paf_extractor_t* ext,
+                                   const char* paf_path,
+                                   const char* out_dir);
+
 #ifdef __cplusplus
 }
 #endif
