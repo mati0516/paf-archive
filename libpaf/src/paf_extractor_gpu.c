@@ -17,11 +17,9 @@
 #define MKDIR(p) mkdir(p, 0755)
 #endif
 
-// ── Platform I/O declarations ─────────────────────────────────────────────────
-
+// DirectStorage batch load — declared only where it can be called (Windows non-CI).
+// The implementation lives in win/paf_io_directstorage.cpp.
 #if defined(_WIN32) && !defined(PAF_CI_BUILD)
-int paf_io_directstorage_load(const wchar_t* path, uint64_t offset,
-                               uint64_t size, void* destination);
 int paf_io_directstorage_load_batch(const wchar_t* path,
                                     const uint64_t* paf_offsets,
                                     const uint64_t* sizes,
@@ -29,20 +27,6 @@ int paf_io_directstorage_load_batch(const wchar_t* path,
                                     const uint64_t* dst_offsets,
                                     uint32_t count,
                                     uint8_t* io_failed);
-#else
-static int paf_io_directstorage_load(const void* p, uint64_t o,
-                                     uint64_t s, void* d) {
-    (void)p;(void)o;(void)s;(void)d; return -1;
-}
-static int paf_io_directstorage_load_batch(const void* p,
-                                           const uint64_t* o,
-                                           const uint64_t* s,
-                                           uint8_t* f,
-                                           const uint64_t* d,
-                                           uint32_t c,
-                                           uint8_t* e) {
-    (void)p;(void)o;(void)s;(void)f;(void)d;(void)c;(void)e; return -1;
-}
 #endif
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -114,8 +98,6 @@ static void phase1_io(paf_extractor_t* ext,
         }
         // Fall through to fread on DS failure.
     }
-#else
-    (void)paf_path; // suppress unused warning on non-Windows; handled below
 #endif
 
     // fread fallback: open once, seek per entry.

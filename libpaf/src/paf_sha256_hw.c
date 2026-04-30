@@ -149,8 +149,6 @@ static void paf_sha256_x86ni(const uint8_t* data, size_t len, uint8_t out[32]) {
     // STATE0 = {A,B,E,F} dword[3..0], STATE1 = {C,D,G,H}
     __m128i S0 = _mm_set_epi32((int)0x6a09e667,(int)0xbb67ae85,(int)0x510e527f,(int)0x9b05688c);
     __m128i S1 = _mm_set_epi32((int)0x3c6ef372,(int)0xa54ff53a,(int)0x1f83d9ab,(int)0x5be0cd19);
-    const __m128i BSWAP = _mm_set_epi64x((long long)0x0c0d0e0f08090a0bULL,
-                                          (long long)0x0405060700010203ULL);
 
     size_t padded;
     uint8_t* buf = sha256_pad(data, len, &padded);
