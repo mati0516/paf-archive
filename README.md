@@ -32,7 +32,59 @@ CUDA (paf_cuda.dll)  →  Vulkan (libvulkan + paf_sha256.spv)  →  CPU SHA-256
 
 All detection is lazy — no explicit initialisation call is required. The Vulkan path requires `paf_sha256.spv` (compiled from `libpaf/src/paf_sha256.comp`) in the working directory or `/usr/lib/paf/`.
 
-## PAF Binary Format (v2)
+## Delta Update (差分アップデート)
+
+PAF の各インデックスエントリには SHA-256 ハッシュが埋め込まれているため、**ファイルデータを再読込せずに O(N) で差分を検出**できます。  
+ゲームアセットのアップデート配信やディレクトリ同期 (rsync 相当) に使用できます。
+
+### ワークフロー
+
+```
+旧ディレクトリ ─── paf_create_index_only ───▶ old.pafi (数MB、データなし)
+新ディレクトリ ─── paf_create_index_only ───▶ new.pafi
+                                               │
+                                               ▼
+                              paf_delta_calculate(old.pafi, new.pafi)
+                                               │
+                        ┌──────────────────────┤
+                        │  ADDED / UPDATED / DELETED エントリ一覧
+                        ▼
+          paf_patch_apply_from_dir(new_dir, delta, dst_dir)
+          → 変更ファイルのみコピー、削除ファイルを除去
+```
+
+### 差分が検出されるケース
+
+| ステータス | 意味 |
+|:---|:---|
+| `PAF_DELTA_ADDED` | 新バージョンに追加されたファイル |
+| `PAF_DELTA_UPDATED` | SHA-256 が変化したファイル |
+| `PAF_DELTA_DELETED` | 旧バージョンにあって新バージョンにないファイル |
+
+### コード例
+
+```c
+// 1. 旧・新のインデックス専用 PAF を作成（データブロックなし、数MB）
+paf_create_index_only("old.pafi", (const char*[]){"/game/v1"}, 1, NULL);
+paf_create_index_only("new.pafi", (const char*[]){"/game/v2"}, 1, NULL);
+
+// 2. O(N) 差分計算（ファイルデータ不要）
+paf_delta_t delta;
+paf_delta_calculate("old.pafi", "new.pafi", &delta);
+printf("%u 件の変更\n", delta.count);
+
+// 3a. 新バージョンがディレクトリの場合
+paf_patch_apply_from_dir("/game/v2", &delta, "/game/installed", NULL, NULL);
+
+// 3b. 新バージョンが PAF ファイルの場合
+paf_patch_apply("new.paf", &delta, "/game/installed", NULL, NULL);
+
+paf_delta_free(&delta);
+```
+
+`paf_delta_optimize_io` を呼ぶと差分エントリをオフセット順にソートし、シーケンシャルアクセスで I/O 効率を最大化できます。
+
+
 
 ```
 [Header 32B] [Data Block] [Index Block N×64B] [Path Buffer]
