@@ -169,10 +169,42 @@ wasm/                   Emscripten bindings
 
 ## Build
 
+### SDK Requirements (Windows full-GPU build only)
+
+#### CUDA Toolkit 13.2
+Required for NVIDIA GPU SHA-256 acceleration (`paf_cuda_kernels.cu`).
+
+**Install:**
+1. Download from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads) — select **Windows → x86_64 → Local Installer**.
+2. Install to the default path `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2`.
+3. Verify: `nvcc --version` should report `release 13.2`.
+
+> CPU-only and DirectStorage builds do **not** require CUDA.
+
+#### DirectStorage SDK 1.2.2 (SDK version 202)
+Required for NVMe→memory batch I/O (`paf_io_directstorage.cpp`).
+
+**Runtime DLL** (`dstorage.dll`) ships with Windows 11 22H2+ and can also be redistributed from the SDK package.  
+**Development headers/libs** (`dstorage.h`, `dstorageerr.h`) are included in `libpaf/src/win/` — no separate installation needed to build.
+
+If you want to update the SDK headers:
+1. Download from [github.com/microsoft/DirectStorage/releases](https://github.com/microsoft/DirectStorage/releases) — pick **DirectStorage_x.y.z.zip**.
+2. Copy `native/include/dstorage.h` and `native/include/dstorageerr.h` into `libpaf/src/win/`.
+3. `#define DSTORAGE_SDK_VERSION` in `dstorage.h` must be ≥ 202 (1.2.x).
+
+> `IDStorageQueue1::EnqueueSetEvent` (used for zero-CPU-spin batch completion) requires SDK ≥ 1.1 (version 201). Earlier versions fall back to a `Sleep(0)` yield loop automatically.
+
+#### Optional: Vulkan SDK (glslangValidator)
+Only needed to recompile `paf_sha256.comp` → `paf_sha256.spv`.  
+Download from [vulkan.lunarg.com/sdk/home](https://vulkan.lunarg.com/sdk/home). A pre-compiled `paf_sha256.spv` is included in the repository.
+
+---
+
 ### Linux / CI (CPU only)
 ```sh
-gcc -O2 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -o libpaf.so
+gcc -O2 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -lpthread -o libpaf.so
 ```
+`-lpthread` is required for parallel file writes (`phase3_write_parallel`). Android/bionic includes pthreads in libc — no extra flag needed there.
 
 ### Windows — CPU only (CI-compatible)
 ```bat
