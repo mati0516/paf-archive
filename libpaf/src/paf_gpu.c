@@ -31,9 +31,14 @@ int paf_gpu_get_info(paf_gpu_info_t* info) {
             wcstombs(info->device_name, desc.Description, sizeof(info->device_name) - 1);
             info->device_name[sizeof(info->device_name) - 1] = '\0';
             
-            info->supports_vulkan = 1; 
             info->supports_direct_io = 1;
-            info->supports_cuda = (strstr(info->device_name, "NVIDIA") != NULL);
+            if (strstr(info->device_name, "NVIDIA") != NULL) {
+                info->supports_gpu_compute = 1;
+                strncpy(info->compute_backend, "CUDA", sizeof(info->compute_backend) - 1);
+            } else {
+                info->supports_gpu_compute = 1;
+                strncpy(info->compute_backend, "Vulkan", sizeof(info->compute_backend) - 1);
+            }
             
             adapter->lpVtbl->Release(adapter);
         }
@@ -42,15 +47,17 @@ int paf_gpu_get_info(paf_gpu_info_t* info) {
 #elif defined(_WIN32)
     snprintf(info->device_name, sizeof(info->device_name), "Windows Generic (CI Build)");
     info->total_vram = 0;
+    strncpy(info->compute_backend, "none", sizeof(info->compute_backend) - 1);
 #elif defined(__ANDROID__) || defined(__APPLE__)
-    // Mobile: Vulkan/Metal is the primary path
-    info->supports_vulkan = 1;
-    info->supports_direct_io = 0;
     snprintf(info->device_name, sizeof(info->device_name), "Mobile Integrated GPU");
+    info->supports_gpu_compute = 1;
+    info->supports_direct_io   = 0;
+    strncpy(info->compute_backend, "Vulkan", sizeof(info->compute_backend) - 1);
 #else
-    // Linux: Check for NVIDIA (CUDA) or AMD (Vulkan/ROCm)
-    info->supports_vulkan = 1;
-    info->supports_direct_io = 1; // io_uring / GDS
+    // Linux: runtime detection deferred to paf_gpu_loader; default Vulkan
+    info->supports_gpu_compute = 1;
+    info->supports_direct_io   = 1;
+    strncpy(info->compute_backend, "Vulkan", sizeof(info->compute_backend) - 1);
 #endif
     return 0;
 }

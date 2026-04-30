@@ -23,19 +23,21 @@ __constant__ uint32_t k[64] = {
 };
 
 __device__ void sha256_transform(uint32_t state[8], const uint8_t data[64]) {
-    uint32_t a, b, c, d, e, f, g, h, i, t1, t2, m[64];
-    
+    uint32_t a, b, c, d, e, f, g, h, t1, t2, m[64];
+    uint32_t i;
+
     #pragma unroll
     for (i = 0; i < 16; ++i)
-        m[i] = (data[i * 4] << 24) | (data[i * 4 + 1] << 16) | (data[i * 4 + 2] << 8) | (data[i * 4 + 3]);
-    
+        m[i] = ((uint32_t)data[i * 4] << 24) | ((uint32_t)data[i * 4 + 1] << 16)
+             | ((uint32_t)data[i * 4 + 2] << 8) | (uint32_t)data[i * 4 + 3];
+
     #pragma unroll
     for (i = 16; i < 64; ++i)
         m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
-        
+
     a = state[0]; b = state[1]; c = state[2]; d = state[3];
     e = state[4]; f = state[5]; g = state[6]; h = state[7];
-    
+
     #pragma unroll
     for (i = 0; i < 64; ++i) {
         t1 = h + EP1(e) + CH(e, f, g) + k[i] + m[i];
@@ -67,7 +69,7 @@ __global__ void paf_sha256_kernel(const uint8_t* data, const uint64_t* offsets, 
     // Process full blocks
     while (remaining >= 64) {
         #pragma unroll
-        for(int i=0; i<64; i++) buffer[i] = file_ptr[i];
+        for (uint32_t i = 0; i < 64; i++) buffer[i] = file_ptr[i];
         sha256_transform(state, buffer);
         file_ptr += 64;
         remaining -= 64;
@@ -75,7 +77,7 @@ __global__ void paf_sha256_kernel(const uint8_t* data, const uint64_t* offsets, 
 
     // Final padding
     memset(buffer, 0, 64);
-    for(int i=0; i<remaining; i++) buffer[i] = file_ptr[i];
+    for (uint32_t i = 0; i < (uint32_t)remaining; i++) buffer[i] = file_ptr[i];
     buffer[remaining] = 0x80;
     
     if (remaining >= 56) {
@@ -96,7 +98,7 @@ __global__ void paf_sha256_kernel(const uint8_t* data, const uint64_t* offsets, 
 
     // Write out results
     #pragma unroll
-    for (int i = 0; i < 8; i++) {
+    for (uint32_t i = 0; i < 8; i++) {
         hashes[idx * 32 + i * 4 + 0] = (state[i] >> 24) & 0xff;
         hashes[idx * 32 + i * 4 + 1] = (state[i] >> 16) & 0xff;
         hashes[idx * 32 + i * 4 + 2] = (state[i] >> 8) & 0xff;
