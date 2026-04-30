@@ -70,8 +70,8 @@ int paf_extractor_gpu_run(paf_extractor_t* ext, const char* path) {
     printf("Detected hardware: %s\n", gpu.device_name);
     printf("  VRAM         : %llu MB\n",
            (unsigned long long)(gpu.total_vram / 1024 / 1024));
-    printf("  GPU compute  : %s (%s)\n",
-           gpu.supports_gpu_compute ? "yes" : "no", gpu.compute_backend);
+    printf("  CUDA         : %s\n", gpu.supports_cuda   ? "yes" : "no");
+    printf("  Vulkan       : %s\n", gpu.supports_vulkan ? "yes" : "no");
     printf("  Fast I/O     : %s\n",
            gpu.supports_direct_io ? "yes (DirectStorage/GDS)" : "no");
 

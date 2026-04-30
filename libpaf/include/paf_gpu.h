@@ -15,11 +15,9 @@ typedef struct {
     uint64_t available_vram;
     uint32_t compute_units;
     char device_name[256];
-    // Domain-level capabilities — callers must not branch on backend names.
-    // Which backend is active is an internal detail reported via compute_backend.
-    int supports_gpu_compute; // any GPU compute path is usable
-    int supports_direct_io;   // fast I/O (DirectStorage / GDS) is available
-    char compute_backend[32]; // informational: "CUDA", "Vulkan", "ROCm", "none"
+    int supports_cuda;
+    int supports_vulkan;      // AMD/Intel/Mobile Support
+    int supports_direct_io;   // DirectStorage/GDS Support
 } paf_gpu_info_t;
 
 typedef struct {
