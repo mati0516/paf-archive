@@ -184,11 +184,27 @@ Required for NVIDIA GPU SHA-256 acceleration (`paf_cuda_kernels.cu`).
 #### DirectStorage SDK 1.2.2 (SDK version 202)
 Required for NVMe→memory batch I/O (`paf_io_directstorage.cpp`).
 
-**Runtime DLL** (`dstorage.dll`) ships with Windows 11 22H2+ and can also be redistributed from the SDK package.  
-**Development headers/libs** (`dstorage.h`, `dstorageerr.h`) are included in `libpaf/src/win/` — no separate installation needed to build.
+**`dstorage.dll` is NOT included in Windows** — it must be installed separately and placed next to `libpaf.dll` (or on the system PATH).
 
-If you want to update the SDK headers:
-1. Download from [github.com/microsoft/DirectStorage/releases](https://github.com/microsoft/DirectStorage/releases) — pick **DirectStorage_x.y.z.zip**.
+**To install the runtime DLL:**
+
+Option A — NuGet (recommended):
+```powershell
+# In your project directory or a staging folder:
+nuget install Microsoft.Direct3D.DirectStorage -Version 1.2.2
+# Copy the DLL to your output directory:
+copy Microsoft.Direct3D.DirectStorage.1.2.2\native\bin\x64\dstorage.dll .
+```
+> If `nuget` is not on PATH, download the NuGet CLI from [nuget.org/downloads](https://www.nuget.org/downloads).
+
+Option B — GitHub release:
+1. Download `DirectStorage_1.2.2.zip` from [github.com/microsoft/DirectStorage/releases](https://github.com/microsoft/DirectStorage/releases).
+2. Extract and copy `native/bin/x64/dstorage.dll` next to `libpaf.dll`.
+
+**Development headers** (`dstorage.h`, `dstorageerr.h`) are already in `libpaf/src/win/` — no extra steps needed to build.
+
+If you want to update the SDK headers to a newer version:
+1. Extract the zip above.
 2. Copy `native/include/dstorage.h` and `native/include/dstorageerr.h` into `libpaf/src/win/`.
 3. `#define DSTORAGE_SDK_VERSION` in `dstorage.h` must be ≥ 202 (1.2.x).
 
