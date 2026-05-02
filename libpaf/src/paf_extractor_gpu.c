@@ -117,33 +117,72 @@ static void phase1_io(paf_extractor_t* ext,
     fclose(fp);
 }
 
-// ── Phase 3: Parallel file write (Windows thread pool / sequential fallback) ──
+// ── Phase 3: Parallel file write ─────────────────────────────────────────────
+// nCPU×2 threads, each owning a static contiguous file range.
+// Per-thread last_dir cache skips ensure_dir when consecutive files in the
+// chunk share the same parent directory (common for sorted game asset trees).
+
+typedef struct {
+    uint32_t        start;
+    uint32_t        end;
+    const char    (*paths)[1024];
+    const uint8_t*  io_failed;
+    const uint8_t*  hash_ok;
+    const uint64_t* offsets;
+    const uint64_t* sizes;
+    const uint8_t*  flat;
+    const char*     out_dir;
+    char            last_dir[2048];
+    uint32_t        errors;  // owned exclusively by this thread
+} chunk_ctx_t;
+
+static void write_chunk(chunk_ctx_t* c) {
+    c->last_dir[0] = '\0';
+    for (uint32_t i = c->start; i < c->end; i++) {
+        if (c->io_failed[i] || !c->hash_ok[i] || c->paths[i][0] == '\0') continue;
+        char out_path[2048];
+        if (snprintf(out_path, sizeof(out_path), "%s/%s",
+                     c->out_dir, c->paths[i]) >= (int)sizeof(out_path)) continue;
+
+        // Extract parent directory to compare against last_dir cache.
+        char dir[2048];
+        strncpy(dir, out_path, sizeof(dir) - 1);
+        dir[sizeof(dir) - 1] = '\0';
+        char* sep = strrchr(dir, '/');
+#if defined(_WIN32)
+        { char* bk = strrchr(dir, '\\'); if (!sep || (bk && bk > sep)) sep = bk; }
+#endif
+        if (sep) *sep = '\0';
+        if (strcmp(dir, c->last_dir) != 0) {
+            ensure_dir(out_path);
+            strncpy(c->last_dir, dir, sizeof(c->last_dir) - 1);
+            c->last_dir[sizeof(c->last_dir) - 1] = '\0';
+        }
+
+        FILE* fp = fopen(out_path, "wb");
+        if (!fp) { c->errors++; continue; }
+        if (c->sizes[i] > 0 &&
+            fwrite(c->flat + c->offsets[i], 1, (size_t)c->sizes[i], fp) !=
+            (size_t)c->sizes[i])
+            c->errors++;
+        fclose(fp);
+    }
+}
+
+static void fill_chunk(chunk_ctx_t* c, uint32_t start, uint32_t end,
+                       const char (*paths)[1024],
+                       const uint8_t* io_failed, const uint8_t* hash_ok,
+                       const uint64_t* offsets, const uint64_t* sizes,
+                       const uint8_t* flat, const char* out_dir) {
+    c->start = start; c->end = end;
+    c->paths = paths; c->io_failed = io_failed; c->hash_ok = hash_ok;
+    c->offsets = offsets; c->sizes = sizes; c->flat = flat; c->out_dir = out_dir;
+}
 
 #if defined(_WIN32) && !defined(PAF_CI_BUILD)
 
-typedef struct {
-    const uint8_t*  data;
-    uint64_t        size;
-    char            path[2048];
-    volatile LONG*  pending;
-    HANDLE          done;
-    volatile LONG*  errors;
-} write_item_t;
-
-static DWORD WINAPI write_worker(LPVOID arg) {
-    write_item_t* item = (write_item_t*)arg;
-    FILE* fp = fopen(item->path, "wb");
-    if (!fp) {
-        InterlockedIncrement(item->errors);
-    } else {
-        if (item->size > 0 &&
-            fwrite(item->data, 1, (size_t)item->size, fp) != (size_t)item->size)
-            InterlockedIncrement(item->errors);
-        fclose(fp);
-    }
-    if (InterlockedDecrement(item->pending) == 0)
-        SetEvent(item->done);
-    free(item);
+static DWORD WINAPI write_chunk_fn(LPVOID arg) {
+    write_chunk((chunk_ctx_t*)arg);
     return 0;
 }
 
@@ -153,107 +192,57 @@ static uint32_t phase3_write_parallel(
         const uint64_t* offsets, const uint64_t* sizes,
         const uint8_t* flat, const char* out_dir)
 {
-    volatile LONG pending = 1; // sentinel: prevents premature signal
-    volatile LONG write_errors = 0;
-    HANDLE hDone = CreateEventW(NULL, FALSE, FALSE, NULL);
-    if (!hDone) {
-        // Fallback to sequential if event creation fails
-        goto sequential;
+    if (n == 0) return 0;
+
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    int nt = (int)si.dwNumberOfProcessors * 2;
+    if (nt > MAXIMUM_WAIT_OBJECTS) nt = MAXIMUM_WAIT_OBJECTS;
+    if (nt < 1) nt = 1;
+    if ((uint32_t)nt > n) nt = (int)n;
+
+    chunk_ctx_t* ctx = (chunk_ctx_t*)calloc(nt, sizeof(chunk_ctx_t));
+    if (!ctx) {
+        chunk_ctx_t c;
+        memset(&c, 0, sizeof(c));
+        fill_chunk(&c, 0, n, paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
+        write_chunk(&c);
+        return c.errors;
     }
 
-    for (uint32_t i = 0; i < n; i++) {
-        if (io_failed[i] || !hash_ok[i] || paths[i][0] == '\0') continue;
-
-        char out_path[2048];
-        if (snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, paths[i]) >=
-            (int)sizeof(out_path)) continue;
-        ensure_dir(out_path);
-
-        write_item_t* item = (write_item_t*)malloc(sizeof(write_item_t));
-        if (!item) { InterlockedIncrement(&write_errors); continue; }
-        item->data    = flat + offsets[i];
-        item->size    = sizes[i];
-        item->pending = &pending;
-        item->done    = hDone;
-        item->errors  = &write_errors;
-        strncpy(item->path, out_path, sizeof(item->path) - 1);
-        item->path[sizeof(item->path) - 1] = '\0';
-
-        InterlockedIncrement(&pending);
-        if (!QueueUserWorkItem(write_worker, item, WT_EXECUTEDEFAULT)) {
-            InterlockedDecrement(&pending);
-            InterlockedIncrement(&write_errors);
-            free(item);
-        }
+    HANDLE handles[MAXIMUM_WAIT_OBJECTS];
+    memset(handles, 0, sizeof(handles));
+    for (int t = 0; t < nt; t++) {
+        uint32_t start = (uint32_t)((uint64_t)t * n / nt);
+        uint32_t end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
+        fill_chunk(&ctx[t], start, end,
+                   paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
+        handles[t] = CreateThread(NULL, 0, write_chunk_fn, &ctx[t], 0, NULL);
+        if (!handles[t]) write_chunk(&ctx[t]);  // run inline on thread creation failure
     }
 
-    // Release sentinel; if all workers already finished, signal now.
-    if (InterlockedDecrement(&pending) > 0)
-        WaitForSingleObject(hDone, INFINITE);
-    CloseHandle(hDone);
-    return (uint32_t)write_errors;
+    HANDLE valid[MAXIMUM_WAIT_OBJECTS];
+    int n_valid = 0;
+    for (int t = 0; t < nt; t++)
+        if (handles[t]) valid[n_valid++] = handles[t];
+    if (n_valid > 0)
+        WaitForMultipleObjects(n_valid, valid, TRUE, INFINITE);
+    for (int t = 0; t < nt; t++)
+        if (handles[t]) CloseHandle(handles[t]);
 
-sequential:
-    if (hDone) CloseHandle(hDone);
-    {
-        uint32_t errs = 0;
-        for (uint32_t i = 0; i < n; i++) {
-            if (io_failed[i] || !hash_ok[i] || paths[i][0] == '\0') continue;
-            char out_path[2048];
-            if (snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, paths[i]) >=
-                (int)sizeof(out_path)) continue;
-            ensure_dir(out_path);
-            FILE* fp = fopen(out_path, "wb");
-            if (!fp) { errs++; continue; }
-            if (sizes[i] > 0 &&
-                fwrite(flat + offsets[i], 1, (size_t)sizes[i], fp) != (size_t)sizes[i])
-                errs++;
-            fclose(fp);
-        }
-        return errs;
-    }
+    uint32_t total = 0;
+    for (int t = 0; t < nt; t++) total += ctx[t].errors;
+    free(ctx);
+    return total;
 }
 
-#else // non-Windows: pthreads pool
+#elif !defined(_WIN32)  // Linux / Android: pthreads
 
 #include <pthread.h>
+#define WRITE_THREADS_MAX 32
 
-#define WRITE_THREADS_MAX 16
-
-typedef struct {
-    uint32_t           n;
-    const char       (*paths)[1024];
-    const uint8_t*    io_failed;
-    const uint8_t*    hash_ok;
-    const uint64_t*   offsets;
-    const uint64_t*   sizes;
-    const uint8_t*    flat;
-    const char*       out_dir;
-    volatile uint32_t next;   // atomic work index
-    volatile uint32_t errors; // atomic error count
-} posix_pool_t;
-
-static void* write_thread_fn(void* arg) {
-    posix_pool_t* p = (posix_pool_t*)arg;
-    for (;;) {
-        uint32_t i = __atomic_fetch_add(&p->next, 1u, __ATOMIC_RELAXED);
-        if (i >= p->n) break;
-        if (p->io_failed[i] || !p->hash_ok[i] || p->paths[i][0] == '\0') continue;
-        char out_path[2048];
-        if (snprintf(out_path, sizeof(out_path), "%s/%s",
-                     p->out_dir, p->paths[i]) >= (int)sizeof(out_path)) continue;
-        ensure_dir(out_path);
-        FILE* fp = fopen(out_path, "wb");
-        if (!fp) {
-            __atomic_fetch_add(&p->errors, 1u, __ATOMIC_RELAXED);
-            continue;
-        }
-        if (p->sizes[i] > 0 &&
-            fwrite(p->flat + p->offsets[i], 1, (size_t)p->sizes[i], fp) !=
-            (size_t)p->sizes[i])
-            __atomic_fetch_add(&p->errors, 1u, __ATOMIC_RELAXED);
-        fclose(fp);
-    }
+static void* write_chunk_fn(void* arg) {
+    write_chunk((chunk_ctx_t*)arg);
     return NULL;
 }
 
@@ -266,23 +255,52 @@ static uint32_t phase3_write_parallel(
     if (n == 0) return 0;
 
     long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
-    int nt = (ncpu > 1) ? (int)ncpu : 1;
+    int nt = (ncpu > 0) ? (int)(ncpu * 2) : 2;
     if (nt > WRITE_THREADS_MAX) nt = WRITE_THREADS_MAX;
-    if (nt > (int)n)            nt = (int)n;
+    if ((uint32_t)nt > n) nt = (int)n;
 
-    posix_pool_t pool = { n, paths, io_failed, hash_ok,
-                          offsets, sizes, flat, out_dir, 0, 0 };
+    chunk_ctx_t* ctx = (chunk_ctx_t*)calloc(nt, sizeof(chunk_ctx_t));
+    if (!ctx) {
+        chunk_ctx_t c;
+        memset(&c, 0, sizeof(c));
+        fill_chunk(&c, 0, n, paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
+        write_chunk(&c);
+        return c.errors;
+    }
 
     pthread_t threads[WRITE_THREADS_MAX];
-    int created = 0;
+    int created[WRITE_THREADS_MAX];
+    memset(created, 0, sizeof(created));
     for (int t = 0; t < nt; t++) {
-        if (pthread_create(&threads[t], NULL, write_thread_fn, &pool) == 0)
-            created++;
+        uint32_t start = (uint32_t)((uint64_t)t * n / nt);
+        uint32_t end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
+        fill_chunk(&ctx[t], start, end,
+                   paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
+        created[t] = (pthread_create(&threads[t], NULL, write_chunk_fn, &ctx[t]) == 0);
+        if (!created[t]) write_chunk(&ctx[t]);
     }
-    for (int t = 0; t < created; t++)
-        pthread_join(threads[t], NULL);
+    for (int t = 0; t < nt; t++)
+        if (created[t]) pthread_join(threads[t], NULL);
 
-    return pool.errors;
+    uint32_t total = 0;
+    for (int t = 0; t < nt; t++) total += ctx[t].errors;
+    free(ctx);
+    return total;
+}
+
+#else  // Windows CI: sequential
+
+static uint32_t phase3_write_parallel(
+        uint32_t n, const char (*paths)[1024],
+        const uint8_t* io_failed, const uint8_t* hash_ok,
+        const uint64_t* offsets, const uint64_t* sizes,
+        const uint8_t* flat, const char* out_dir)
+{
+    chunk_ctx_t c;
+    memset(&c, 0, sizeof(c));
+    fill_chunk(&c, 0, n, paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
+    write_chunk(&c);
+    return c.errors;
 }
 
 #endif
