@@ -26,7 +26,7 @@ static const DWORD PATCH_WAIT_TIMEOUT_MS = 30000;
 
 namespace paf {
 
-PatchEngine::PatchEngine() : m_initialized(false) {
+PatchEngine::PatchEngine() : m_wait_event(nullptr), m_initialized(false) {
     if (!LoadDStorageOnce()) return;
     if (FAILED(s_DStorageGetFactory(IID_PPV_ARGS(&m_factory)))) return;
 
@@ -36,12 +36,53 @@ PatchEngine::PatchEngine() : m_initialized(false) {
     queueDesc.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
     queueDesc.Device     = nullptr;
 
-    if (SUCCEEDED(m_factory->CreateQueue(&queueDesc, IID_PPV_ARGS(&m_queue))))
-        m_initialized = true;
+    if (FAILED(m_factory->CreateQueue(&queueDesc, IID_PPV_ARGS(&m_queue)))) return;
+
+    // Opportunistically upgrade to IDStorageQueue1 for zero-CPU-spin event waits.
+    m_queue.As(&m_queue1);
+
+    m_wait_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!m_wait_event) return;
+
+    m_initialized = true;
 }
 
 PatchEngine::~PatchEngine() {
-    // ComPtrs release automatically
+    if (m_wait_event) CloseHandle(m_wait_event);
+}
+
+// Submit all enqueued requests and block until they complete.
+// Uses EnqueueSetEvent (zero-CPU-spin) when IDStorageQueue1 is available,
+// falls back to IDStorageStatusArray + Sleep(0) yield loop.
+static HRESULT SubmitAndWaitPatch(
+    IDStorageQueue*  queue,
+    IDStorageQueue1* queue1,
+    IDStorageFactory* factory,
+    HANDLE wait_event)
+{
+    if (queue1 && wait_event) {
+        ResetEvent(wait_event);
+        queue1->EnqueueSetEvent(wait_event);
+        queue->Submit();
+        if (WaitForSingleObject(wait_event, PATCH_WAIT_TIMEOUT_MS) == WAIT_TIMEOUT)
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        return S_OK;
+    }
+
+    // Fallback: status array + Sleep(0) yield loop.
+    Microsoft::WRL::ComPtr<IDStorageStatusArray> status;
+    HRESULT hr = factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&status));
+    if (FAILED(hr)) return hr;
+    queue->EnqueueStatus(status.Get(), 0);
+    queue->Submit();
+    DWORD elapsed = 0;
+    while (!status->IsComplete(0)) {
+        if (elapsed >= PATCH_WAIT_TIMEOUT_MS)
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        Sleep(0);
+        elapsed++;
+    }
+    return status->GetHResult(0);
 }
 
 HRESULT PatchEngine::ApplyDeltaToBuffer(
@@ -77,42 +118,23 @@ HRESULT PatchEngine::ApplyDeltaToBuffer(
         current_dst_offset += entry.data_size;
         request_count++;
 
-        // Flush queue when approaching capacity limit
+        // Flush queue when approaching capacity limit.
         if (request_count >= DSTORAGE_MAX_QUEUE_CAPACITY - 1) {
-            Microsoft::WRL::ComPtr<IDStorageStatusArray> midStatus;
-            m_factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&midStatus));
-            m_queue->EnqueueStatus(midStatus.Get(), 0);
-            m_queue->Submit();
-            DWORD elapsed = 0;
-            while (!midStatus->IsComplete(0)) {
-                if (elapsed >= PATCH_WAIT_TIMEOUT_MS)
-                    return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
-                Sleep(1);
-                elapsed++;
-            }
-            HRESULT midHr = midStatus->GetHResult(0);
-            if (FAILED(midHr)) return midHr;
+            hr = SubmitAndWaitPatch(m_queue.Get(), m_queue1.Get(),
+                                    m_factory.Get(), m_wait_event);
+            if (FAILED(hr)) return hr;
             request_count = 0;
         }
     }
 
     if (request_count == 0) return S_OK;
 
-    Microsoft::WRL::ComPtr<IDStorageStatusArray> statusArray;
-    m_factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&statusArray));
-    m_queue->EnqueueStatus(statusArray.Get(), 0);
-    m_queue->Submit();
-
-    DWORD elapsed = 0;
-    while (!statusArray->IsComplete(0)) {
-        if (elapsed >= PATCH_WAIT_TIMEOUT_MS)
-            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
-        Sleep(1);
-        elapsed++;
-    }
+    hr = SubmitAndWaitPatch(m_queue.Get(), m_queue1.Get(),
+                             m_factory.Get(), m_wait_event);
+    if (FAILED(hr)) return hr;
 
     if (out_total_copied_size) *out_total_copied_size = current_dst_offset;
-    return statusArray->GetHResult(0);
+    return S_OK;
 }
 
 } // namespace paf

@@ -17,17 +17,6 @@
 #define MKDIR(p) mkdir(p, 0755)
 #endif
 
-// DirectStorage batch load — declared only where it can be called (Windows non-CI).
-// The implementation lives in win/paf_io_directstorage.cpp.
-#if defined(_WIN32) && !defined(PAF_CI_BUILD)
-int paf_io_directstorage_load_batch(const wchar_t* path,
-                                    const uint64_t* paf_offsets,
-                                    const uint64_t* sizes,
-                                    uint8_t* flat,
-                                    const uint64_t* dst_offsets,
-                                    uint32_t count,
-                                    uint8_t* io_failed);
-#endif
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -64,9 +53,10 @@ static int read_entry_path(paf_extractor_t* ext, uint32_t idx,
 }
 
 // ── Phase 1: Batch I/O ────────────────────────────────────────────────────────
-// Loads all n files in one pass.
-// DS path: enqueues all requests and submits once per DS_BATCH_CAP entries.
-// fread path: opens the PAF file once and fseeks per entry.
+// PAF stores all file data sequentially in a single flat file. Sequential fread
+// with OS readahead is significantly faster than DirectStorage (DESTINATION_MEMORY)
+// for this access pattern: DS disables OS buffering, fragmenting the read into
+// per-file unbuffered I/O requests that bypass readahead.
 
 static void phase1_io(paf_extractor_t* ext,
                       const char* paf_path,
@@ -76,31 +66,7 @@ static void phase1_io(paf_extractor_t* ext,
                       uint8_t* flat,
                       uint8_t* io_failed)
 {
-#if defined(_WIN32) && !defined(PAF_CI_BUILD)
-    if (paf_dstorage_is_available()) {
-        // Build per-entry absolute PAF offsets for the batch DS call.
-        uint64_t* paf_offs = (uint64_t*)malloc(n * sizeof(uint64_t));
-        if (paf_offs) {
-            for (uint32_t i = 0; i < n; i++)
-                paf_offs[i] = sizeof(paf_header_t) +
-                              ext->entries[processed + i].data_offset;
-
-            wchar_t wpath[1024];
-            mbstowcs(wpath, paf_path, sizeof(wpath)/sizeof(wpath[0]) - 1);
-            wpath[sizeof(wpath)/sizeof(wpath[0]) - 1] = L'\0';
-
-            if (paf_io_directstorage_load_batch(wpath, paf_offs, sizes,
-                                                flat, offsets, n, io_failed) == 0) {
-                free(paf_offs);
-                return;
-            }
-            free(paf_offs);
-        }
-        // Fall through to fread on DS failure.
-    }
-#endif
-
-    // fread fallback: open once, seek per entry.
+    // fread path: open once, seek per entry.
     FILE* fp = fopen(paf_path, "rb");
     if (!fp) {
         memset(io_failed, 1, n);

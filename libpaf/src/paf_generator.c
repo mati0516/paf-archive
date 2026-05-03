@@ -10,7 +10,107 @@
 #include <windows.h>
 #else
 #include <unistd.h>
+#include <pthread.h>
 #define _strdup strdup
+#endif
+
+// ── Parallel CPU SHA-256 ───────────────────────────────────────────────────────
+
+typedef struct {
+    const uint8_t*  buf;
+    const uint64_t* offsets;
+    const uint64_t* sizes;
+    uint8_t*        hashes;
+    uint32_t        start;
+    uint32_t        end;
+} sha256_worker_t;
+
+static void sha256_worker_run(sha256_worker_t* w) {
+    for (uint32_t i = w->start; i < w->end; i++)
+        paf_sha256_compute(w->buf + w->offsets[i], (size_t)w->sizes[i],
+                           w->hashes + i * 32);
+}
+
+#if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
+
+static DWORD WINAPI sha256_worker_fn(LPVOID arg) {
+    sha256_worker_run((sha256_worker_t*)arg);
+    return 0;
+}
+
+static void parallel_sha256_cpu(const uint8_t* buf, const uint64_t* offsets,
+                                 const uint64_t* sizes, uint32_t n, uint8_t* hashes)
+{
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    int nt = (int)si.dwNumberOfProcessors;
+    if (nt > MAXIMUM_WAIT_OBJECTS) nt = MAXIMUM_WAIT_OBJECTS;
+    if (nt < 1) nt = 1;
+    if ((uint32_t)nt > n) nt = (int)n;
+
+    sha256_worker_t* ctx = (sha256_worker_t*)malloc(nt * sizeof(sha256_worker_t));
+    if (!ctx) {
+        for (uint32_t i = 0; i < n; i++)
+            paf_sha256_compute(buf + offsets[i], (size_t)sizes[i], hashes + i * 32);
+        return;
+    }
+
+    HANDLE handles[MAXIMUM_WAIT_OBJECTS];
+    for (int t = 0; t < nt; t++) {
+        ctx[t].buf = buf; ctx[t].offsets = offsets; ctx[t].sizes = sizes;
+        ctx[t].hashes = hashes;
+        ctx[t].start = (uint32_t)((uint64_t)t * n / nt);
+        ctx[t].end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
+        handles[t] = CreateThread(NULL, 0, sha256_worker_fn, &ctx[t], 0, NULL);
+        if (!handles[t]) sha256_worker_run(&ctx[t]);
+    }
+    HANDLE valid[MAXIMUM_WAIT_OBJECTS];
+    int nv = 0;
+    for (int t = 0; t < nt; t++) if (handles[t]) valid[nv++] = handles[t];
+    if (nv > 0) WaitForMultipleObjects(nv, valid, TRUE, INFINITE);
+    for (int t = 0; t < nt; t++) if (handles[t]) CloseHandle(handles[t]);
+    free(ctx);
+}
+
+#else  // Linux / Android: pthreads
+
+#define SHA256_THREADS_MAX 32
+
+static void* sha256_worker_fn(void* arg) {
+    sha256_worker_run((sha256_worker_t*)arg);
+    return NULL;
+}
+
+static void parallel_sha256_cpu(const uint8_t* buf, const uint64_t* offsets,
+                                 const uint64_t* sizes, uint32_t n, uint8_t* hashes)
+{
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    int nt = (ncpu > 0) ? (int)ncpu : 2;
+    if (nt > SHA256_THREADS_MAX) nt = SHA256_THREADS_MAX;
+    if ((uint32_t)nt > n) nt = (int)n;
+
+    sha256_worker_t* ctx = (sha256_worker_t*)malloc(nt * sizeof(sha256_worker_t));
+    if (!ctx) {
+        for (uint32_t i = 0; i < n; i++)
+            paf_sha256_compute(buf + offsets[i], (size_t)sizes[i], hashes + i * 32);
+        return;
+    }
+
+    pthread_t threads[SHA256_THREADS_MAX];
+    int created[SHA256_THREADS_MAX];
+    for (int t = 0; t < nt; t++) {
+        ctx[t].buf = buf; ctx[t].offsets = offsets; ctx[t].sizes = sizes;
+        ctx[t].hashes = hashes;
+        ctx[t].start = (uint32_t)((uint64_t)t * n / nt);
+        ctx[t].end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
+        created[t] = (pthread_create(&threads[t], NULL, sha256_worker_fn, &ctx[t]) == 0);
+        if (!created[t]) sha256_worker_run(&ctx[t]);
+    }
+    for (int t = 0; t < nt; t++)
+        if (created[t]) pthread_join(threads[t], NULL);
+    free(ctx);
+}
+
 #endif
 
 int paf_generator_init(paf_generator_t* gen) {
@@ -50,13 +150,9 @@ static int paf_generator_flush_batch(paf_generator_t* gen) {
                 || (paf_vulkan_is_available() && g_paf_vulkan_hash_flat != NULL &&
                     g_paf_vulkan_hash_flat(gen->batch_data_buffer, gen->batch_offsets,
                                            gen->batch_sizes, gen->batch_count, host_hashes) == 0);
-    if (!gpu_done) {
-        for (uint32_t i = 0; i < gen->batch_count; i++) {
-            paf_sha256_compute(gen->batch_data_buffer + gen->batch_offsets[i],
-                               (size_t)gen->batch_sizes[i],
-                               host_hashes + (i * 32));
-        }
-    }
+    if (!gpu_done)
+        parallel_sha256_cpu(gen->batch_data_buffer, gen->batch_offsets,
+                             gen->batch_sizes, gen->batch_count, host_hashes);
 
     // Step 3: Process Index
     for (uint32_t i = 0; i < gen->batch_count; i++) {

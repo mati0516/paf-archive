@@ -35,6 +35,7 @@ class PafDirectStorage {
     ComPtr<IDStorageQueue1>  m_queue1;   // non-null if SDK >= 1.1 (EnqueueSetEvent)
     ComPtr<IDStorageFile>    m_file;
     std::wstring             m_current_path;
+    HANDLE                   m_wait_event = nullptr;  // pre-allocated, reused per batch
 
     HRESULT OpenFile(const wchar_t* path) {
         m_file.Reset();
@@ -47,27 +48,28 @@ class PafDirectStorage {
     // wait for completion.  Uses EnqueueSetEvent (zero-CPU-spin) when available,
     // falls back to statusArray + Sleep(0) yield loop.
     HRESULT SubmitAndWait() {
+        if (m_queue1 && m_wait_event) {
+            ResetEvent(m_wait_event);
+            m_queue1->EnqueueSetEvent(m_wait_event);
+            m_queue->Submit();
+            WaitForSingleObject(m_wait_event, INFINITE);
+            return S_OK;
+        }
+
         ComPtr<IDStorageStatusArray> status;
         HRESULT hr = m_factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&status));
         if (FAILED(hr)) return hr;
         m_queue->EnqueueStatus(status.Get(), 0);
-
-        if (m_queue1) {
-            HANDLE hEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-            if (!hEvent) return E_OUTOFMEMORY;
-            m_queue1->EnqueueSetEvent(hEvent);
-            m_queue->Submit();
-            WaitForSingleObject(hEvent, INFINITE);
-            CloseHandle(hEvent);
-        } else {
-            m_queue->Submit();
-            // Sleep(0) yields the time slice instead of burning 1ms per poll.
-            while (!status->IsComplete(0)) Sleep(0);
-        }
+        m_queue->Submit();
+        while (!status->IsComplete(0)) Sleep(0);
         return status->GetHResult(0);
     }
 
 public:
+    ~PafDirectStorage() {
+        if (m_wait_event) CloseHandle(m_wait_event);
+    }
+
     HRESULT Initialize(const wchar_t* path) {
         if (!LoadDStorageOnce()) return E_NOTIMPL;
 
@@ -85,6 +87,12 @@ public:
 
         // Opportunistically get IDStorageQueue1 (SDK >= 1.1) for EnqueueSetEvent.
         m_queue.As(&m_queue1);
+
+        // Pre-allocate wait event; reused for every SubmitAndWait call.
+        if (m_queue1) {
+            m_wait_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (!m_wait_event) return E_OUTOFMEMORY;
+        }
 
         return OpenFile(path);
     }
