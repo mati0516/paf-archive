@@ -1,35 +1,95 @@
+#ifdef _WIN32
 #include "paf_patch.hpp"
-#include <iostream>
+#include <windows.h>
 
-#pragma comment(lib, "dstorage.lib")
+// DStorageGetFactory resolved at runtime — no dstorage.lib needed at link time.
+typedef HRESULT (WINAPI *PFN_DSTORAGE_GET_FACTORY)(REFIID riid, void** ppv);
+
+static PFN_DSTORAGE_GET_FACTORY s_DStorageGetFactory = nullptr;
+static HMODULE                  s_hDStorage           = nullptr;
+
+static bool LoadDStorageOnce() {
+    if (s_DStorageGetFactory) return true;
+    s_hDStorage = LoadLibraryA("dstorage.dll");
+    if (!s_hDStorage) return false;
+    s_DStorageGetFactory = (PFN_DSTORAGE_GET_FACTORY)(uintptr_t)
+                           GetProcAddress(s_hDStorage, "DStorageGetFactory");
+    if (!s_DStorageGetFactory) {
+        FreeLibrary(s_hDStorage);
+        s_hDStorage = nullptr;
+        return false;
+    }
+    return true;
+}
+
+static const DWORD PATCH_WAIT_TIMEOUT_MS = 30000;
 
 namespace paf {
 
-PatchEngine::PatchEngine() : m_initialized(false) {
-    if (FAILED(DStorageGetFactory(IID_PPV_ARGS(&m_factory)))) {
-        return;
-    }
+PatchEngine::PatchEngine() : m_wait_event(nullptr), m_initialized(false) {
+    if (!LoadDStorageOnce()) return;
+    if (FAILED(s_DStorageGetFactory(IID_PPV_ARGS(&m_factory)))) return;
 
     DSTORAGE_QUEUE_DESC queueDesc = {};
-    queueDesc.Capacity = DSTORAGE_MAX_QUEUE_CAPACITY;
-    queueDesc.Priority = DSTORAGE_PRIORITY_NORMAL;
+    queueDesc.Capacity   = DSTORAGE_MAX_QUEUE_CAPACITY;
+    queueDesc.Priority   = DSTORAGE_PRIORITY_NORMAL;
     queueDesc.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
-    queueDesc.Device = nullptr; // Destination is CPU memory
+    queueDesc.Device     = nullptr;
 
-    if (SUCCEEDED(m_factory->CreateQueue(&queueDesc, IID_PPV_ARGS(&m_queue)))) {
-        m_initialized = true;
-    }
+    if (FAILED(m_factory->CreateQueue(&queueDesc, IID_PPV_ARGS(&m_queue)))) return;
+
+    // Opportunistically upgrade to IDStorageQueue1 for zero-CPU-spin event waits.
+    m_queue.As(&m_queue1);
+
+    m_wait_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!m_wait_event) return;
+
+    m_initialized = true;
 }
 
 PatchEngine::~PatchEngine() {
-    // ComPtrs will release automatically
+    if (m_wait_event) CloseHandle(m_wait_event);
+}
+
+// Submit all enqueued requests and block until they complete.
+// Uses EnqueueSetEvent (zero-CPU-spin) when IDStorageQueue1 is available,
+// falls back to IDStorageStatusArray + Sleep(0) yield loop.
+static HRESULT SubmitAndWaitPatch(
+    IDStorageQueue*  queue,
+    IDStorageQueue1* queue1,
+    IDStorageFactory* factory,
+    HANDLE wait_event)
+{
+    if (queue1 && wait_event) {
+        ResetEvent(wait_event);
+        queue1->EnqueueSetEvent(wait_event);
+        queue->Submit();
+        if (WaitForSingleObject(wait_event, PATCH_WAIT_TIMEOUT_MS) == WAIT_TIMEOUT)
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        return S_OK;
+    }
+
+    // Fallback: status array + Sleep(0) yield loop.
+    Microsoft::WRL::ComPtr<IDStorageStatusArray> status;
+    HRESULT hr = factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&status));
+    if (FAILED(hr)) return hr;
+    queue->EnqueueStatus(status.Get(), 0);
+    queue->Submit();
+    DWORD elapsed = 0;
+    while (!status->IsComplete(0)) {
+        if (elapsed >= PATCH_WAIT_TIMEOUT_MS)
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        Sleep(0);
+        elapsed++;
+    }
+    return status->GetHResult(0);
 }
 
 HRESULT PatchEngine::ApplyDeltaToBuffer(
     const std::wstring& new_paf_path,
-    const paf_delta_t& delta,
-    void* out_buffer,
-    uint64_t* out_total_copied_size) 
+    const paf_delta_t&  delta,
+    void*               out_buffer,
+    uint64_t*           out_total_copied_size)
 {
     if (!m_initialized) return E_FAIL;
     if (out_total_copied_size) *out_total_copied_size = 0;
@@ -39,57 +99,43 @@ HRESULT PatchEngine::ApplyDeltaToBuffer(
     if (FAILED(hr)) return hr;
 
     uint64_t current_dst_offset = 0;
-    uint32_t request_count = 0;
+    uint32_t request_count      = 0;
 
     for (uint32_t i = 0; i < delta.count; ++i) {
         const auto& entry = delta.entries[i];
-
-        // Process only ADDED or UPDATED
         if (entry.status == PAF_DELTA_DELETED) continue;
 
         DSTORAGE_REQUEST request = {};
-        request.Options.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
+        request.Options.SourceType      = DSTORAGE_REQUEST_SOURCE_FILE;
         request.Options.DestinationType = DSTORAGE_REQUEST_DESTINATION_MEMORY;
-        
-        // Source: File in the new PAF
-        request.Source.File.Source = sourceFile.Get();
-        request.Source.File.Offset = entry.new_offset;
-        request.Source.File.Size = (uint32_t)entry.data_size;
-
-        // Destination: Sequential position in the large buffer
+        request.Source.File.Source      = sourceFile.Get();
+        request.Source.File.Offset      = entry.new_offset;
+        request.Source.File.Size        = (uint32_t)entry.data_size;
         request.Destination.Memory.Buffer = (uint8_t*)out_buffer + current_dst_offset;
-        request.Destination.Memory.Size = (uint32_t)entry.data_size;
+        request.Destination.Memory.Size   = (uint32_t)entry.data_size;
 
         m_queue->EnqueueRequest(&request);
-        
         current_dst_offset += entry.data_size;
         request_count++;
 
-        // If queue capacity reached, submit and wait or use multiple queues
+        // Flush queue when approaching capacity limit.
         if (request_count >= DSTORAGE_MAX_QUEUE_CAPACITY - 1) {
-            // In a production scenario, we'd handle batching here.
-            // For the prototype, we assume DSTORAGE_MAX_QUEUE_CAPACITY is enough 
-            // or we could implement a more complex pooling.
+            hr = SubmitAndWaitPatch(m_queue.Get(), m_queue1.Get(),
+                                    m_factory.Get(), m_wait_event);
+            if (FAILED(hr)) return hr;
+            request_count = 0;
         }
     }
 
     if (request_count == 0) return S_OK;
 
-    // Monitor completion
-    Microsoft::WRL::ComPtr<IDStorageStatusArray> statusArray;
-    m_factory->CreateStatusArray(1, nullptr, IID_PPV_ARGS(&statusArray));
-    m_queue->EnqueueStatus(statusArray.Get(), 0);
-    m_queue->Submit();
-
-    // In a real application, you would use an event or a poll thread.
-    // For the prototype, we block until complete.
-    while (!statusArray->IsComplete(0)) {
-        Sleep(1);
-    }
+    hr = SubmitAndWaitPatch(m_queue.Get(), m_queue1.Get(),
+                             m_factory.Get(), m_wait_event);
+    if (FAILED(hr)) return hr;
 
     if (out_total_copied_size) *out_total_copied_size = current_dst_offset;
-
-    return statusArray->GetHResult(0);
+    return S_OK;
 }
 
 } // namespace paf
+#endif // _WIN32

@@ -15,7 +15,6 @@ typedef struct {
     char path[1024];       // UTF-8 file path (null-terminated)
     uint32_t size;         // File size in bytes
     uint32_t offset;       // Offset to the file data inside .paf
-    uint32_t crc32;        // CRC32 checksum of the file
     uint8_t hash[32];      // SHA-256 hash
 } PafEntry;
 
@@ -25,8 +24,16 @@ typedef struct {
     uint32_t count;        // Number of files
 } PafList;
 
+// Progress callback: called after each file during long operations
+// done/total = file counts, path = current file path, user_data = caller context
+typedef void (*paf_progress_fn)(uint32_t done, uint32_t total, const char* path, void* user_data);
+
 // Create a .paf archive from specified files or folders
 PAF_API int paf_create_binary(const char* out_paf_path, const char** input_paths, int path_count, const char* ignore_file_path, int recursive_ignore);
+
+// Create an index-only .paf (header + index + path buffer, no data blocks).
+// Much faster for large directories; suitable as input to paf_delta_calculate.
+PAF_API int paf_create_index_only(const char* out_paf, const char** input_paths, int path_count, const char* filter);
 
 // Extract all contents of a .paf archive into a directory
 PAF_API int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite);
@@ -47,6 +54,14 @@ PAF_API int file_exists_in_archive(const char* paf_path, const char* internal_pa
 
 // Check if a folder (prefix) exists in the archive
 PAF_API int folder_exists_in_archive(const char* paf_path, const char* internal_dir);
+
+// Create a compact patch PAF from old_dir → new_dir.
+// ADDED entries carry full file data; UPDATED entries carry a binary delta
+// (PAF_ENTRY_BINARY_DELTA); DELETED entries have no data (PAF_ENTRY_DELETED).
+// Apply with paf_patch_apply_atomic().
+PAF_API int paf_create_patch(const char* old_dir, const char* new_dir,
+                              const char* out_paf,
+                              paf_progress_fn progress, void* user_data);
 
 #ifdef __cplusplus
 }

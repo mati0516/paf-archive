@@ -30,7 +30,9 @@ public:
 
 private:
     Microsoft::WRL::ComPtr<IDStorageFactory> m_factory;
-    Microsoft::WRL::ComPtr<IDStorageQueue> m_queue;
+    Microsoft::WRL::ComPtr<IDStorageQueue>   m_queue;
+    Microsoft::WRL::ComPtr<IDStorageQueue1>  m_queue1;  // SDK >= 1.1: EnqueueSetEvent
+    HANDLE m_wait_event;
     bool m_initialized;
 };
 

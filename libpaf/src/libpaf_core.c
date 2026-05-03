@@ -1,5 +1,8 @@
 #define LIBPAF_EXPORTS
 #include "libpaf.h"
+#include "paf_generator.h"
+#include "paf_delta.h"
+#include "paf_binary_delta.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +13,7 @@
 #include "dirent_win.h"
 #include <direct.h>
 #include <io.h>
+#include <windows.h>
 #define MKDIR(path) _mkdir(path)
 #define F_OK 0
 #define access _access
@@ -22,6 +26,7 @@
 #else
 #include <dirent.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <sys/types.h>
 #define MKDIR(path) mkdir(path, 0755)
 #endif
@@ -39,15 +44,6 @@ static int paf_is_path_safe(const char* path) {
     return 1;
 }
 
-uint32_t crc32(const unsigned char* data, size_t length) {
-    uint32_t crc = 0xFFFFFFFF;
-    for (size_t i = 0; i < length; i++) {
-        crc ^= data[i];
-        for (int j = 0; j < 8; j++)
-            crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
-    }
-    return ~crc;
-}
 
 void ensure_directory(const char* full_path) {
     char path[1024];
@@ -67,7 +63,6 @@ typedef struct {
     char* path;
     uint32_t size;
     uint32_t offset;
-    uint32_t crc32;
 } FileEntry;
 
 typedef struct {
@@ -148,24 +143,16 @@ static int collect_files_binary(const char* base_dir, const char* rel_path,
                                  recursive_ignore ? &local_rules : parent_rules,
                                  recursive_ignore);
         } else if (S_ISREG(st.st_mode)) {
-            FILE* fp = fopen(fullpath, "rb");
-            if (!fp) continue;
-            fseek(fp, 0, SEEK_END);
-            uint32_t size = (uint32_t)ftell(fp);
-            fseek(fp, 0, SEEK_SET);
-            unsigned char* buf = malloc(size);
-            (void)fread(buf, 1, size, fp);
-            fclose(fp);
-            uint32_t crc = crc32(buf, size);
-            free(buf);
-
             FileEntry fe;
             fe.path = strdup(child_rel);
-            fe.size = size;
+            fe.size = (uint32_t)st.st_size;
             fe.offset = 0;
-            fe.crc32 = crc;
 
-            *out_entries = realloc(*out_entries, sizeof(FileEntry) * (*out_count + 1));
+            if (*out_count % 64 == 0) {
+                FileEntry* tmp = realloc(*out_entries, sizeof(FileEntry) * (*out_count + 64));
+                if (!tmp) { free(fe.path); continue; }
+                *out_entries = tmp;
+            }
             (*out_entries)[(*out_count)++] = fe;
         }
     }
@@ -194,114 +181,433 @@ int paf_create_binary(const char* out_paf_path, const char** input_paths, int pa
     }
     free_ignore_list(&root_rules);
 
-    FILE* out = fopen(out_paf_path, "wb");
-    if (!out) return -1;
-
-    fwrite("PAF1", 1, 4, out);
-    fwrite(&count, sizeof(uint32_t), 1, out);
-
-    uint32_t offset = 0;
-    for (int i = 0; i < count; ++i) {
-        uint16_t len = (uint16_t)strlen(entries[i].path);
-        fwrite(&len, sizeof(uint16_t), 1, out);
-        fwrite(entries[i].path, 1, len, out);
-        fwrite(&entries[i].size, sizeof(uint32_t), 1, out);
-        fwrite(&offset, sizeof(uint32_t), 1, out);
-        fwrite(&entries[i].crc32, sizeof(uint32_t), 1, out);
-        entries[i].offset = offset;
-        offset += entries[i].size;
+    paf_generator_t gen;
+    if (paf_generator_init(&gen) != 0) {
+        for (int i = 0; i < count; ++i) free(entries[i].path);
+        free(entries);
+        return -1;
     }
 
     for (int i = 0; i < count; ++i) {
         char fullpath[1024];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", input_paths[0], entries[i].path);
         FILE* fp = fopen(fullpath, "rb");
-        if (!fp) continue;
-        char* buf = malloc(entries[i].size);
-        (void)fread(buf, 1, entries[i].size, fp);
-        fclose(fp);
-        fwrite(buf, 1, entries[i].size, out);
+        if (!fp) { free(entries[i].path); continue; }
+        uint8_t* buf = entries[i].size > 0 ? (uint8_t*)malloc(entries[i].size) : NULL;
+        if (buf && fread(buf, 1, entries[i].size, fp) == (size_t)entries[i].size) {
+            paf_generator_add_file(&gen, entries[i].path, buf, entries[i].size);
+        } else {
+            rewind(fp);
+            paf_generator_add_file_stream(&gen, entries[i].path, fp, entries[i].size);
+        }
         free(buf);
+        fclose(fp);
+        free(entries[i].path);
+    }
+    free(entries);
+
+    int result = paf_generator_finalize(&gen, out_paf_path);
+    paf_generator_cleanup(&gen);
+    return result;
+}
+
+int paf_create_index_only(const char* out_paf, const char** input_paths, int path_count,
+                           const char* filter) {
+    (void)filter;
+
+    FileEntry* entries = NULL;
+    int count = 0;
+    IgnoreRuleList root_rules = {0};
+
+    if (path_count > 0) {
+        char default_path[1024];
+        snprintf(default_path, sizeof(default_path), "%s/.pafignore", input_paths[0]);
+        load_ignore_file(default_path, &root_rules);
+    }
+    for (int i = 0; i < path_count; i++) {
+        collect_files_binary(input_paths[i], "", &entries, &count, &root_rules, 1);
+    }
+    free_ignore_list(&root_rules);
+
+    paf_generator_t gen;
+    if (paf_generator_init(&gen) != 0) {
+        for (int i = 0; i < count; i++) free(entries[i].path);
+        free(entries);
+        return -1;
+    }
+    gen.index_only = 1; // CUDA/CPU batch SHA-256, no data block written
+
+    for (int i = 0; i < count; i++) {
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", input_paths[0], entries[i].path);
+        FILE* fp = fopen(fullpath, "rb");
+        if (!fp) { free(entries[i].path); continue; }
+        uint8_t* buf = entries[i].size > 0 ? (uint8_t*)malloc(entries[i].size) : NULL;
+        if (buf && fread(buf, 1, entries[i].size, fp) == (size_t)entries[i].size) {
+            paf_generator_add_file(&gen, entries[i].path, buf, entries[i].size);
+        } else {
+            rewind(fp);
+            paf_generator_add_file_stream(&gen, entries[i].path, fp, entries[i].size);
+        }
+        free(buf);
+        fclose(fp);
+        free(entries[i].path);
+    }
+    free(entries);
+
+    int result = paf_generator_finalize(&gen, out_paf);
+    paf_generator_cleanup(&gen);
+    return result;
+}
+
+// ── Parallel extraction worker ────────────────────────────────────────────────
+// Each thread opens its own FILE* to avoid fseek contention on a shared handle.
+// buf is a per-thread reusable buffer that grows on demand (never shrinks).
+
+typedef struct {
+    const char*              paf_path;
+    const paf_header_t*      header;
+    const paf_index_entry_t* idx;
+    const char*              output_dir;
+    int                      overwrite;
+    uint32_t                 start;
+    uint32_t                 end;
+} extract_worker_t;
+
+static void extract_worker_run(extract_worker_t* w) {
+    FILE* fp = fopen(w->paf_path, "rb");
+    if (!fp) return;
+
+    size_t buf_cap = 0;
+    char*  buf     = NULL;
+
+    for (uint32_t i = w->start; i < w->end; i++) {
+        char path[1024] = {0};
+        uint32_t path_len = w->idx[i].path_length;
+        if (path_len >= sizeof(path)) path_len = (uint32_t)sizeof(path) - 1;
+
+        if (fseek(fp, (long)(w->header->path_offset +
+                              w->idx[i].path_buffer_offset), SEEK_SET) != 0 ||
+            fread(path, 1, path_len, fp) != path_len) continue;
+        path[path_len] = '\0';
+
+        if (!paf_is_path_safe(path)) continue;
+
+        char fullpath[1024];
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s",
+                     w->output_dir, path) >= (int)sizeof(fullpath)) continue;
+        ensure_directory(fullpath);
+
+        if (!w->overwrite) {
+            FILE* test = fopen(fullpath, "rb");
+            if (test) { fclose(test); continue; }
+        }
+
+        uint64_t data_size = w->idx[i].data_size;
+
+        // Grow per-thread buffer only when needed; never shrinks within this run.
+        if (data_size > buf_cap) {
+            free(buf);
+            buf = (char*)malloc((size_t)data_size);
+            buf_cap = buf ? (size_t)data_size : 0;
+        }
+        if (!buf && data_size > 0) continue;
+
+        if (fseek(fp, (long)(sizeof(paf_header_t) + w->idx[i].data_offset),
+                  SEEK_SET) != 0) continue;
+
+        FILE* out_fp = fopen(fullpath, "wb");
+        if (!out_fp) continue;
+
+        if (data_size == 0 ||
+            (fread(buf, 1, (size_t)data_size, fp) == (size_t)data_size &&
+             fwrite(buf, 1, (size_t)data_size, out_fp) == (size_t)data_size))
+            ;  // success — no-op
+        fclose(out_fp);
     }
 
-    for (int i = 0; i < count; ++i) free(entries[i].path);
-    free(entries);
-    fclose(out);
+    free(buf);
+    fclose(fp);
+}
+
+#if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
+
+static DWORD WINAPI extract_worker_fn(LPVOID arg) {
+    extract_worker_run((extract_worker_t*)arg);
     return 0;
 }
+
+static void run_extract_parallel(const char* paf_path,
+                                  const paf_header_t* header,
+                                  const paf_index_entry_t* idx,
+                                  const char* output_dir, int overwrite)
+{
+    uint32_t n = header->file_count;
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    int nt = (int)si.dwNumberOfProcessors;
+    if (nt > MAXIMUM_WAIT_OBJECTS) nt = MAXIMUM_WAIT_OBJECTS;
+    if (nt < 1) nt = 1;
+    if ((uint32_t)nt > n) nt = (int)n;
+
+    extract_worker_t* ctx = (extract_worker_t*)malloc(nt * sizeof(extract_worker_t));
+    if (!ctx) {
+        extract_worker_t c = { paf_path, header, idx, output_dir, overwrite, 0, n };
+        extract_worker_run(&c);
+        return;
+    }
+
+    HANDLE handles[MAXIMUM_WAIT_OBJECTS];
+    for (int t = 0; t < nt; t++) {
+        ctx[t].paf_path   = paf_path;   ctx[t].header     = header;
+        ctx[t].idx        = idx;         ctx[t].output_dir = output_dir;
+        ctx[t].overwrite  = overwrite;
+        ctx[t].start = (uint32_t)((uint64_t)t * n / nt);
+        ctx[t].end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
+        handles[t] = CreateThread(NULL, 0, extract_worker_fn, &ctx[t], 0, NULL);
+        if (!handles[t]) extract_worker_run(&ctx[t]);
+    }
+    HANDLE valid[MAXIMUM_WAIT_OBJECTS]; int nv = 0;
+    for (int t = 0; t < nt; t++) if (handles[t]) valid[nv++] = handles[t];
+    if (nv > 0) WaitForMultipleObjects(nv, valid, TRUE, INFINITE);
+    for (int t = 0; t < nt; t++) if (handles[t]) CloseHandle(handles[t]);
+    free(ctx);
+}
+
+#else  // Linux / Android: pthreads
+
+#define EXTRACT_THREADS_MAX 32
+
+static void* extract_worker_fn(void* arg) {
+    extract_worker_run((extract_worker_t*)arg);
+    return NULL;
+}
+
+static void run_extract_parallel(const char* paf_path,
+                                  const paf_header_t* header,
+                                  const paf_index_entry_t* idx,
+                                  const char* output_dir, int overwrite)
+{
+    uint32_t n = header->file_count;
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    int nt = (ncpu > 0) ? (int)ncpu : 2;
+    if (nt > EXTRACT_THREADS_MAX) nt = EXTRACT_THREADS_MAX;
+    if ((uint32_t)nt > n) nt = (int)n;
+
+    extract_worker_t* ctx = (extract_worker_t*)malloc(nt * sizeof(extract_worker_t));
+    if (!ctx) {
+        extract_worker_t c = { paf_path, header, idx, output_dir, overwrite, 0, n };
+        extract_worker_run(&c);
+        return;
+    }
+
+    pthread_t threads[EXTRACT_THREADS_MAX];
+    int created[EXTRACT_THREADS_MAX];
+    for (int t = 0; t < nt; t++) {
+        ctx[t].paf_path   = paf_path;   ctx[t].header     = header;
+        ctx[t].idx        = idx;         ctx[t].output_dir = output_dir;
+        ctx[t].overwrite  = overwrite;
+        ctx[t].start = (uint32_t)((uint64_t)t * n / nt);
+        ctx[t].end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
+        created[t] = (pthread_create(&threads[t], NULL, extract_worker_fn, &ctx[t]) == 0);
+        if (!created[t]) extract_worker_run(&ctx[t]);
+    }
+    for (int t = 0; t < nt; t++)
+        if (created[t]) pthread_join(threads[t], NULL);
+    free(ctx);
+}
+
+#endif
 
 int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite) {
     FILE* fp = fopen(paf_path, "rb");
     if (!fp) return -1;
 
-    char magic[4];
-    if (fread(magic, 1, 4, fp) != 4 || strncmp(magic, "PAF1", 4) != 0) {
+    paf_header_t header;
+    if (fread(&header, sizeof(header), 1, fp) != 1 || memcmp(header.magic, PAF_MAGIC, 4) != 0) {
         fclose(fp);
         return -2;
     }
 
-    uint32_t file_count;
-    if (fread(&file_count, sizeof(uint32_t), 1, fp) != 1) {
-        fclose(fp);
-        return -3;
+    paf_index_entry_t* idx = (paf_index_entry_t*)malloc(sizeof(paf_index_entry_t) * header.file_count);
+    if (!idx) { fclose(fp); return -1; }
+
+    fseek(fp, (long)header.index_offset, SEEK_SET);
+    if (fread(idx, sizeof(paf_index_entry_t), header.file_count, fp) != header.file_count) {
+        free(idx); fclose(fp); return -3;
+    }
+    fclose(fp);  // Workers open their own handles.
+
+    run_extract_parallel(paf_path, &header, idx, output_dir, overwrite);
+
+    free(idx);
+    return 0;
+}
+
+int paf_create_patch(const char* old_dir, const char* new_dir,
+                     const char* out_paf,
+                     paf_progress_fn progress, void* user_data) {
+    if (!old_dir || !new_dir || !out_paf) return -1;
+
+    /* Temp paths for index-only snapshots */
+    char old_idx[128], new_idx[128];
+#if defined(_WIN32) && !defined(__linux__) && !defined(__ANDROID__)
+    snprintf(old_idx, sizeof(old_idx), "paf_patch_old_%u.pafi",
+             (unsigned)GetCurrentProcessId());
+    snprintf(new_idx, sizeof(new_idx), "paf_patch_new_%u.pafi",
+             (unsigned)GetCurrentProcessId());
+#else
+    snprintf(old_idx, sizeof(old_idx), "/tmp/paf_patch_old_%d.pafi", (int)getpid());
+    snprintf(new_idx, sizeof(new_idx), "/tmp/paf_patch_new_%d.pafi", (int)getpid());
+#endif
+
+    const char* old_inputs[1] = { old_dir };
+    const char* new_inputs[1] = { new_dir };
+    if (paf_create_index_only(old_idx, old_inputs, 1, NULL) != 0 ||
+        paf_create_index_only(new_idx, new_inputs, 1, NULL) != 0) {
+        remove(old_idx); remove(new_idx); return -1;
     }
 
-    long index_start = ftell(fp);
-    for (uint32_t j = 0; j < file_count; ++j) {
-        uint16_t skip_len;
-        if (fread(&skip_len, sizeof(uint16_t), 1, fp) != 1) break;
-        fseek(fp, skip_len + sizeof(uint32_t) * 3, SEEK_CUR);
+    paf_delta_t delta = {NULL, 0};
+    if (paf_delta_calculate(old_idx, new_idx, &delta) != 0) {
+        remove(old_idx); remove(new_idx); return -1;
     }
-    long data_block_start = ftell(fp);
+    remove(old_idx);
+    remove(new_idx);
 
-    for (uint32_t i = 0; i < file_count; ++i) {
-        fseek(fp, index_start, SEEK_SET);
-        for (uint32_t j = 0; j < i; ++j) {
-            uint16_t skip_len;
-            if (fread(&skip_len, sizeof(uint16_t), 1, fp) != 1) break;
-            fseek(fp, skip_len + sizeof(uint32_t) * 3, SEEK_CUR);
-        }
+    FILE* data_tmp  = tmpfile();
+    FILE* index_tmp = tmpfile();
+    FILE* path_tmp  = tmpfile();
+    if (!data_tmp || !index_tmp || !path_tmp) {
+        if (data_tmp)  fclose(data_tmp);
+        if (index_tmp) fclose(index_tmp);
+        if (path_tmp)  fclose(path_tmp);
+        paf_delta_free(&delta);
+        return -1;
+    }
 
-        uint16_t len;
-        char path[1024];
-        if (fread(&len, sizeof(uint16_t), 1, fp) != 1) break;
-        if (len >= sizeof(path)) {
-            continue;
-        }
-        if (fread(path, 1, len, fp) != len) break;
-        path[len] = '\0';
-        
-        uint32_t size, offset, crc;
-        if (fread(&size, sizeof(uint32_t), 1, fp) != 1) break;
-        if (fread(&offset, sizeof(uint32_t), 1, fp) != 1) break;
-        if (fread(&crc, sizeof(uint32_t), 1, fp) != 1) break;
+    uint64_t data_offset = 0;
+    uint64_t path_offset = 0;
+    uint32_t file_count  = 0;
+    int errors = 0;
+    uint8_t copybuf[65536];
 
-        if (!paf_is_path_safe(path)) continue;
+    for (uint32_t i = 0; i < delta.count; i++) {
+        const paf_delta_entry_t* e = &delta.entries[i];
 
-        char fullpath[1024];
-        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path) >= (int)sizeof(fullpath)) continue;
-        ensure_directory(fullpath);
+        paf_index_entry_t idx_e;
+        memset(&idx_e, 0, sizeof(idx_e));
+        idx_e.path_buffer_offset = path_offset;
+        idx_e.path_length = (uint32_t)strlen(e->path);
+        fwrite(e->path, 1, idx_e.path_length, path_tmp);
+        path_offset += idx_e.path_length;
 
-        if (!overwrite) {
-            FILE* test = fopen(fullpath, "rb");
-            if (test) { fclose(test); continue; }
-        }
-
-        fseek(fp, data_block_start + offset, SEEK_SET);
-
-        FILE* out_fp = fopen(fullpath, "wb");
-        if (!out_fp) continue;
-
-        char* buffer = malloc(size);
-        if (buffer) {
-            if (fread(buffer, 1, size, fp) == size) {
-                fwrite(buffer, 1, size, out_fp);
+        if (e->status == PAF_DELTA_DELETED) {
+            idx_e.flags       = PAF_ENTRY_DELETED;
+            idx_e.data_offset = data_offset;
+            idx_e.data_size   = 0;
+            /* hash stays zero */
+        } else if (e->status == PAF_DELTA_ADDED) {
+            char src[1024];
+            snprintf(src, sizeof(src), "%s/%s", new_dir, e->path);
+            FILE* fp = fopen(src, "rb");
+            if (fp) {
+                size_t n;
+                idx_e.data_offset = data_offset;
+                uint64_t bytes = 0;
+                while ((n = fread(copybuf, 1, sizeof(copybuf), fp)) > 0) {
+                    fwrite(copybuf, 1, n, data_tmp);
+                    bytes += n;
+                }
+                fclose(fp);
+                idx_e.data_size = bytes;
+                idx_e.flags     = 0;
+                memcpy(idx_e.hash, e->hash, 32);
+                data_offset += bytes;
+            } else {
+                errors++;
             }
-            free(buffer);
+        } else { /* UPDATED */
+            char old_file[1024], new_file[1024];
+            snprintf(old_file, sizeof(old_file), "%s/%s", old_dir, e->path);
+            snprintf(new_file, sizeof(new_file), "%s/%s", new_dir, e->path);
+
+            int wrote_delta = 0;
+            struct stat st;
+            if (stat(old_file, &st) == 0 && (uint64_t)st.st_size <= 128ULL * 1024 * 1024) {
+                size_t dsz = 0;
+                uint8_t* dbuf = paf_bdelta_create(old_file, new_file, &dsz);
+                if (dbuf) {
+                    idx_e.data_offset = data_offset;
+                    idx_e.data_size   = (uint64_t)dsz;
+                    idx_e.flags       = PAF_ENTRY_BINARY_DELTA;
+                    memcpy(idx_e.hash, e->hash, 32);
+                    fwrite(dbuf, 1, dsz, data_tmp);
+                    free(dbuf);
+                    data_offset += (uint64_t)dsz;
+                    wrote_delta = 1;
+                }
+            }
+            if (!wrote_delta) {
+                /* Fallback: full new file */
+                FILE* fp = fopen(new_file, "rb");
+                if (fp) {
+                    size_t n;
+                    idx_e.data_offset = data_offset;
+                    uint64_t bytes = 0;
+                    while ((n = fread(copybuf, 1, sizeof(copybuf), fp)) > 0) {
+                        fwrite(copybuf, 1, n, data_tmp);
+                        bytes += n;
+                    }
+                    fclose(fp);
+                    idx_e.data_size = bytes;
+                    idx_e.flags     = 0;
+                    memcpy(idx_e.hash, e->hash, 32);
+                    data_offset += bytes;
+                } else {
+                    errors++;
+                }
+            }
         }
-        fclose(out_fp);
+
+        fwrite(&idx_e, sizeof(idx_e), 1, index_tmp);
+        file_count++;
+
+        if (progress) progress(i + 1, delta.count, e->path, user_data);
     }
 
-    fclose(fp);
+    paf_delta_free(&delta);
+
+    if (errors > 0) {
+        fclose(data_tmp); fclose(index_tmp); fclose(path_tmp);
+        return -errors;
+    }
+
+    FILE* out = fopen(out_paf, "wb");
+    if (!out) {
+        fclose(data_tmp); fclose(index_tmp); fclose(path_tmp);
+        return -1;
+    }
+
+    paf_header_t hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    memcpy(hdr.magic, PAF_MAGIC, 4);
+    hdr.version      = PAF_VERSION;
+    hdr.file_count   = file_count;
+    hdr.index_offset = (uint64_t)sizeof(paf_header_t) + data_offset;
+    hdr.path_offset  = hdr.index_offset + (uint64_t)file_count * sizeof(paf_index_entry_t);
+    fwrite(&hdr, sizeof(hdr), 1, out);
+
+    size_t n;
+    fseek(data_tmp,  0, SEEK_SET);
+    while ((n = fread(copybuf, 1, sizeof(copybuf), data_tmp))  > 0) fwrite(copybuf, 1, n, out);
+    fseek(index_tmp, 0, SEEK_SET);
+    while ((n = fread(copybuf, 1, sizeof(copybuf), index_tmp)) > 0) fwrite(copybuf, 1, n, out);
+    fseek(path_tmp,  0, SEEK_SET);
+    while ((n = fread(copybuf, 1, sizeof(copybuf), path_tmp))  > 0) fwrite(copybuf, 1, n, out);
+
+    fclose(out);
+    fclose(data_tmp);
+    fclose(index_tmp);
+    fclose(path_tmp);
     return 0;
 }

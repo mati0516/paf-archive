@@ -3,11 +3,16 @@
 
 #include <stdint.h>
 
-#define PAF_MAGIC "PAF1"
-#define PAF_VERSION 1
+#define PAF_MAGIC   "PAF1"
+#define PAF_VERSION 2
 
-#define PAF_EXTRACT_SMART_OVERWRITE 0x01
-#define PAF_FLAG_INDEX_ONLY         0x02
+// ── Header-level flags (paf_header_t.flags) ──────────────────────────────
+#define PAF_EXTRACT_SMART_OVERWRITE 0x01  // Skip identical files during extract
+#define PAF_FLAG_INDEX_ONLY         0x02  // Data Block absent; index + paths only
+
+// ── Per-entry flags (paf_index_entry_t.flags) ────────────────────────────
+#define PAF_ENTRY_DELETED           0x04  // File deleted; data_size = 0
+#define PAF_ENTRY_BINARY_DELTA      0x08  // data block is a PAFD binary delta
 
 #ifdef _WIN32
   #ifdef LIBPAF_EXPORTS
@@ -26,28 +31,46 @@ extern "C" {
 #pragma pack(push, 1)
 
 /**
- * PAF v2 Main Header (32 bytes)
+ * PAF Header — 32 bytes, always at offset 0.
+ *
+ *  Offset  Size  Field
+ *  0       4     magic       "PAF1"
+ *  4       4     version     2
+ *  8       4     flags       PAF_FLAG_* bitmask
+ *  12      4     file_count  number of index entries
+ *  16      8     index_offset  byte offset of Index Block
+ *  24      8     path_offset   byte offset of Path Buffer
  */
 typedef struct {
-    char magic[4];           // 'PAF1'
-    uint32_t version;        // 1
-    uint32_t flags;          // Future use
-    uint32_t file_count;     // Total number of files
-    uint64_t index_offset;   // Offset to the start of Index Block
-    uint64_t path_offset;    // Offset to the start of Path Buffer
+    char     magic[4];        // "PAF1"
+    uint32_t version;         // 2
+    uint32_t flags;           // PAF_FLAG_* bitmask
+    uint32_t file_count;
+    uint64_t index_offset;    // absolute offset to Index Block
+    uint64_t path_offset;     // absolute offset to Path Buffer
 } paf_header_t;
 
 /**
- * PAF v1 Index Entry (40 bytes)
- * Designed for GPU coalesced access (fixed size).
+ * Index Entry — 128 bytes per file, fixed-size for GPU coalesced access.
+ *
+ *  Offset  Size  Field
+ *  0       8     path_buffer_offset  byte offset within Path Buffer
+ *  8       4     path_length         byte length of UTF-8 path (no NUL)
+ *  12      4     flags               PAF_ENTRY_* bitmask
+ *  16      8     data_offset         byte offset within Data Block
+ *  24      8     data_size           size of data block entry in bytes
+ *  32      64    hash                integrity hash (first 32 bytes = SHA-256;
+ *                                    full 64 bytes reserved for SHA-512 / BLAKE3)
+ *  96      32    reserved            zero; reserved for future use
  */
 typedef struct {
-    uint64_t path_buffer_offset; // Offset within Path Buffer
-    uint32_t path_length;        // Length of path string
-    uint32_t flags;              // Per-file flags (e.g. compression type)
-    uint64_t data_offset;        // Offset within Data Block (relative to start of Data Block)
-    uint64_t data_size;          // Size of file data
-    uint8_t  hash[32];           // SHA-256 hash
+    uint64_t path_buffer_offset;
+    uint32_t path_length;
+    uint32_t flags;
+    uint64_t data_offset;
+    uint64_t data_size;
+    uint8_t  hash[64];        // SHA-256 in [0..31]; [32..63] reserved / future algorithm
+    uint8_t  reserved[32];    // zero-filled; reserved for future use
 } paf_index_entry_t;
 
 #pragma pack(pop)
@@ -56,4 +79,4 @@ typedef struct {
 }
 #endif
 
-#endif // LIBPAF2_H
+#endif // LIBPAF_H_V2
