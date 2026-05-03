@@ -200,7 +200,11 @@ test/*
 /test_paf_ext
 /test_paf2*
 *.paf
-/bench/
+/bench/*.exe
+/bench/*.obj
+/bench/*.paf
+/bench/extracted/
+/bench/archives/
 /bench_win_data/
 /build_android/
 /build_linux/

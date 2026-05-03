@@ -21,19 +21,35 @@ int paf_gpu_init(void) {
     g_dstorage_avail = 0;
 
     /* --- CUDA --- */
-    HMODULE hcuda = LoadLibraryA("paf_cuda.dll");
-    if (hcuda) {
-        typedef int (*init_fn)(void);
-        init_fn              cuda_init  = (init_fn)             (uintptr_t)GetProcAddress(hcuda, "paf_cuda_init");
-        paf_cuda_hash_flat_fn hash_flat = (paf_cuda_hash_flat_fn)(uintptr_t)GetProcAddress(hcuda, "paf_cuda_hash_flat");
-
-        if (cuda_init && hash_flat && cuda_init() == 0) {
-            g_paf_cuda_hash_flat = hash_flat;
+#ifdef PAF_USE_CUDA
+    /* CUDA kernels are statically linked (paf_cuda_kernels.obj -> libpaf.dll);
+       no external paf_cuda.dll exists, so call the symbols directly. */
+    {
+        extern int paf_cuda_init(void);
+        extern int paf_cuda_hash_flat(const uint8_t*, const uint64_t*, const uint64_t*,
+                                      uint32_t, uint8_t*);
+        if (paf_cuda_init() == 0) {
+            g_paf_cuda_hash_flat = paf_cuda_hash_flat;
             g_cuda_avail = 1;
-        } else {
-            FreeLibrary(hcuda);
         }
     }
+#else
+    {
+        HMODULE hcuda = LoadLibraryA("paf_cuda.dll");
+        if (hcuda) {
+            typedef int (*init_fn)(void);
+            init_fn              cuda_init  = (init_fn)             (uintptr_t)GetProcAddress(hcuda, "paf_cuda_init");
+            paf_cuda_hash_flat_fn hash_flat = (paf_cuda_hash_flat_fn)(uintptr_t)GetProcAddress(hcuda, "paf_cuda_hash_flat");
+
+            if (cuda_init && hash_flat && cuda_init() == 0) {
+                g_paf_cuda_hash_flat = hash_flat;
+                g_cuda_avail = 1;
+            } else {
+                FreeLibrary(hcuda);
+            }
+        }
+    }
+#endif
 
     /* --- DirectStorage --- */
     HMODULE hds = LoadLibraryA("dstorage.dll");
