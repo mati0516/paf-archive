@@ -13,6 +13,7 @@
 #include "dirent_win.h"
 #include <direct.h>
 #include <io.h>
+#include <windows.h>
 #define MKDIR(path) _mkdir(path)
 #define F_OK 0
 #define access _access
@@ -25,6 +26,7 @@
 #else
 #include <dirent.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <sys/types.h>
 #define MKDIR(path) mkdir(path, 0755)
 #endif
@@ -258,6 +260,164 @@ int paf_create_index_only(const char* out_paf, const char** input_paths, int pat
     return result;
 }
 
+// ── Parallel extraction worker ────────────────────────────────────────────────
+// Each thread opens its own FILE* to avoid fseek contention on a shared handle.
+// buf is a per-thread reusable buffer that grows on demand (never shrinks).
+
+typedef struct {
+    const char*              paf_path;
+    const paf_header_t*      header;
+    const paf_index_entry_t* idx;
+    const char*              output_dir;
+    int                      overwrite;
+    uint32_t                 start;
+    uint32_t                 end;
+} extract_worker_t;
+
+static void extract_worker_run(extract_worker_t* w) {
+    FILE* fp = fopen(w->paf_path, "rb");
+    if (!fp) return;
+
+    size_t buf_cap = 0;
+    char*  buf     = NULL;
+
+    for (uint32_t i = w->start; i < w->end; i++) {
+        char path[1024] = {0};
+        uint32_t path_len = w->idx[i].path_length;
+        if (path_len >= sizeof(path)) path_len = (uint32_t)sizeof(path) - 1;
+
+        if (fseek(fp, (long)(w->header->path_offset +
+                              w->idx[i].path_buffer_offset), SEEK_SET) != 0 ||
+            fread(path, 1, path_len, fp) != path_len) continue;
+        path[path_len] = '\0';
+
+        if (!paf_is_path_safe(path)) continue;
+
+        char fullpath[1024];
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s",
+                     w->output_dir, path) >= (int)sizeof(fullpath)) continue;
+        ensure_directory(fullpath);
+
+        if (!w->overwrite) {
+            FILE* test = fopen(fullpath, "rb");
+            if (test) { fclose(test); continue; }
+        }
+
+        uint64_t data_size = w->idx[i].data_size;
+
+        // Grow per-thread buffer only when needed; never shrinks within this run.
+        if (data_size > buf_cap) {
+            free(buf);
+            buf = (char*)malloc((size_t)data_size);
+            buf_cap = buf ? (size_t)data_size : 0;
+        }
+        if (!buf && data_size > 0) continue;
+
+        if (fseek(fp, (long)(sizeof(paf_header_t) + w->idx[i].data_offset),
+                  SEEK_SET) != 0) continue;
+
+        FILE* out_fp = fopen(fullpath, "wb");
+        if (!out_fp) continue;
+
+        if (data_size == 0 ||
+            (fread(buf, 1, (size_t)data_size, fp) == (size_t)data_size &&
+             fwrite(buf, 1, (size_t)data_size, out_fp) == (size_t)data_size))
+            ;  // success — no-op
+        fclose(out_fp);
+    }
+
+    free(buf);
+    fclose(fp);
+}
+
+#if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
+
+static DWORD WINAPI extract_worker_fn(LPVOID arg) {
+    extract_worker_run((extract_worker_t*)arg);
+    return 0;
+}
+
+static void run_extract_parallel(const char* paf_path,
+                                  const paf_header_t* header,
+                                  const paf_index_entry_t* idx,
+                                  const char* output_dir, int overwrite)
+{
+    uint32_t n = header->file_count;
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    int nt = (int)si.dwNumberOfProcessors;
+    if (nt > MAXIMUM_WAIT_OBJECTS) nt = MAXIMUM_WAIT_OBJECTS;
+    if (nt < 1) nt = 1;
+    if ((uint32_t)nt > n) nt = (int)n;
+
+    extract_worker_t* ctx = (extract_worker_t*)malloc(nt * sizeof(extract_worker_t));
+    if (!ctx) {
+        extract_worker_t c = { paf_path, header, idx, output_dir, overwrite, 0, n };
+        extract_worker_run(&c);
+        return;
+    }
+
+    HANDLE handles[MAXIMUM_WAIT_OBJECTS];
+    for (int t = 0; t < nt; t++) {
+        ctx[t].paf_path   = paf_path;   ctx[t].header     = header;
+        ctx[t].idx        = idx;         ctx[t].output_dir = output_dir;
+        ctx[t].overwrite  = overwrite;
+        ctx[t].start = (uint32_t)((uint64_t)t * n / nt);
+        ctx[t].end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
+        handles[t] = CreateThread(NULL, 0, extract_worker_fn, &ctx[t], 0, NULL);
+        if (!handles[t]) extract_worker_run(&ctx[t]);
+    }
+    HANDLE valid[MAXIMUM_WAIT_OBJECTS]; int nv = 0;
+    for (int t = 0; t < nt; t++) if (handles[t]) valid[nv++] = handles[t];
+    if (nv > 0) WaitForMultipleObjects(nv, valid, TRUE, INFINITE);
+    for (int t = 0; t < nt; t++) if (handles[t]) CloseHandle(handles[t]);
+    free(ctx);
+}
+
+#else  // Linux / Android: pthreads
+
+#define EXTRACT_THREADS_MAX 32
+
+static void* extract_worker_fn(void* arg) {
+    extract_worker_run((extract_worker_t*)arg);
+    return NULL;
+}
+
+static void run_extract_parallel(const char* paf_path,
+                                  const paf_header_t* header,
+                                  const paf_index_entry_t* idx,
+                                  const char* output_dir, int overwrite)
+{
+    uint32_t n = header->file_count;
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    int nt = (ncpu > 0) ? (int)ncpu : 2;
+    if (nt > EXTRACT_THREADS_MAX) nt = EXTRACT_THREADS_MAX;
+    if ((uint32_t)nt > n) nt = (int)n;
+
+    extract_worker_t* ctx = (extract_worker_t*)malloc(nt * sizeof(extract_worker_t));
+    if (!ctx) {
+        extract_worker_t c = { paf_path, header, idx, output_dir, overwrite, 0, n };
+        extract_worker_run(&c);
+        return;
+    }
+
+    pthread_t threads[EXTRACT_THREADS_MAX];
+    int created[EXTRACT_THREADS_MAX];
+    for (int t = 0; t < nt; t++) {
+        ctx[t].paf_path   = paf_path;   ctx[t].header     = header;
+        ctx[t].idx        = idx;         ctx[t].output_dir = output_dir;
+        ctx[t].overwrite  = overwrite;
+        ctx[t].start = (uint32_t)((uint64_t)t * n / nt);
+        ctx[t].end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
+        created[t] = (pthread_create(&threads[t], NULL, extract_worker_fn, &ctx[t]) == 0);
+        if (!created[t]) extract_worker_run(&ctx[t]);
+    }
+    for (int t = 0; t < nt; t++)
+        if (created[t]) pthread_join(threads[t], NULL);
+    free(ctx);
+}
+
+#endif
+
 int paf_extract_binary(const char* paf_path, const char* output_dir, int overwrite) {
     FILE* fp = fopen(paf_path, "rb");
     if (!fp) return -1;
@@ -275,43 +435,11 @@ int paf_extract_binary(const char* paf_path, const char* output_dir, int overwri
     if (fread(idx, sizeof(paf_index_entry_t), header.file_count, fp) != header.file_count) {
         free(idx); fclose(fp); return -3;
     }
+    fclose(fp);  // Workers open their own handles.
 
-    for (uint32_t i = 0; i < header.file_count; ++i) {
-        char path[1024] = {0};
-        uint32_t path_len = idx[i].path_length;
-        if (path_len >= sizeof(path)) path_len = (uint32_t)sizeof(path) - 1;
-
-        fseek(fp, (long)(header.path_offset + idx[i].path_buffer_offset), SEEK_SET);
-        if (fread(path, 1, path_len, fp) != path_len) continue;
-        path[path_len] = '\0';
-
-        if (!paf_is_path_safe(path)) continue;
-
-        char fullpath[1024];
-        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", output_dir, path) >= (int)sizeof(fullpath)) continue;
-        ensure_directory(fullpath);
-
-        if (!overwrite) {
-            FILE* test = fopen(fullpath, "rb");
-            if (test) { fclose(test); continue; }
-        }
-
-        fseek(fp, (long)(sizeof(paf_header_t) + idx[i].data_offset), SEEK_SET);
-        FILE* out_fp = fopen(fullpath, "wb");
-        if (!out_fp) continue;
-
-        char* buffer = (char*)malloc((size_t)idx[i].data_size);
-        if (buffer) {
-            if (fread(buffer, 1, (size_t)idx[i].data_size, fp) == (size_t)idx[i].data_size) {
-                fwrite(buffer, 1, (size_t)idx[i].data_size, out_fp);
-            }
-            free(buffer);
-        }
-        fclose(out_fp);
-    }
+    run_extract_parallel(paf_path, &header, idx, output_dir, overwrite);
 
     free(idx);
-    fclose(fp);
     return 0;
 }
 

@@ -3,6 +3,7 @@
 #include "paf_gpu.h"
 #include "paf_gpu_loader.h"
 #include "paf_sha256_hw.h"
+#include "paf_parallel.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -341,20 +342,14 @@ int paf_extractor_gpu_run(paf_extractor_t* ext,
             if (io_failed[i]) io_errors++;
         }
 
-        // Phase 2: SHA-256 — GPU (CUDA → Vulkan) → CPU fallback.
+        // Phase 2: SHA-256 — GPU (CUDA → Vulkan) → parallel CPU fallback.
         int gpu_ok = total_size > 0 &&
                      ((paf_cuda_is_available()   && g_paf_cuda_hash_flat &&
                        g_paf_cuda_hash_flat(flat, offsets, sizes, n, hashes) == 0)
                    || (paf_vulkan_is_available() && g_paf_vulkan_hash_flat &&
                        g_paf_vulkan_hash_flat(flat, offsets, sizes, n, hashes) == 0));
-        if (!gpu_ok) {
-            for (uint32_t i = 0; i < n; i++) {
-                if (sizes[i] == 0 || io_failed[i]) {
-                    memset(hashes + i * 32, 0, 32); continue;
-                }
-                paf_sha256_compute(flat + offsets[i], (size_t)sizes[i], hashes + i * 32);
-            }
-        }
+        if (!gpu_ok && total_size > 0)
+            parallel_sha256_cpu(flat, offsets, sizes, n, hashes);
 
         // Verify hashes.
         for (uint32_t i = 0; i < n; i++) {
