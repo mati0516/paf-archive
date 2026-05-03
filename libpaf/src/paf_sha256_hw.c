@@ -167,22 +167,16 @@ static void paf_sha256_x86ni(const uint8_t* data, size_t len, uint8_t out[32]) {
         for (int i = 16; i < 64; i++)
             W[i] = S1(W[i-2]) + W[i-7] + S0(W[i-15]) + W[i-16];
 
-        // 64 rounds via sha256rnds2 (2 rounds per call, 32 calls total)
+        // 64 rounds: one sha256rnds2 pair per 4-round step.
+        // MSG must carry all four K+W values so shuffle(0x0e) correctly moves
+        // rounds r+2/r+3 into the low dwords for the second call.
         for (int r = 0; r < 64; r += 4) {
-            __m128i MSG = _mm_set_epi32((int)(W[r+1]+SHA256_K[r+1]),
-                                        (int)(W[r  ]+SHA256_K[r  ]),
-                                        (int)(W[r+1]+SHA256_K[r+1]),
-                                        (int)(W[r  ]+SHA256_K[r  ]));
-            // Only low 2 dwords used by sha256rnds2; high 2 are ignored
-            MSG = _mm_set_epi32(0, 0, (int)(W[r+1]+SHA256_K[r+1]), (int)(W[r]+SHA256_K[r]));
-            S1 = _mm_sha256rnds2_epu32(S1, S0, MSG);
-            MSG = _mm_shuffle_epi32(MSG, 0x0e);
-            S0 = _mm_sha256rnds2_epu32(S0, S1, MSG);
-
-            MSG = _mm_set_epi32(0, 0, (int)(W[r+3]+SHA256_K[r+3]), (int)(W[r+2]+SHA256_K[r+2]));
-            S1 = _mm_sha256rnds2_epu32(S1, S0, MSG);
-            MSG = _mm_shuffle_epi32(MSG, 0x0e);
-            S0 = _mm_sha256rnds2_epu32(S0, S1, MSG);
+            __m128i MSG = _mm_set_epi32(
+                (int)(W[r+3]+SHA256_K[r+3]), (int)(W[r+2]+SHA256_K[r+2]),
+                (int)(W[r+1]+SHA256_K[r+1]), (int)(W[r  ]+SHA256_K[r  ]));
+            S1 = _mm_sha256rnds2_epu32(S1, S0, MSG);   /* rounds r,   r+1 → CDGH */
+            MSG = _mm_shuffle_epi32(MSG, 0x0e);          /* move r+2/r+3 to low dwords */
+            S0 = _mm_sha256rnds2_epu32(S0, S1, MSG);   /* rounds r+2, r+3 → ABEF */
         }
 
         S0 = _mm_add_epi32(S0, sv0);
@@ -190,13 +184,17 @@ static void paf_sha256_x86ni(const uint8_t* data, size_t len, uint8_t out[32]) {
     }
     free(buf);
 
-    // Rearrange: S0={A,B,E,F}, S1={C,D,G,H} → digest order ABCDEFGH
-    __m128i tmp = _mm_shuffle_epi32(S0, 0x1b);  // {F,E,B,A}
-    S1          = _mm_shuffle_epi32(S1, 0xb1);  // {D,C,H,G}
-    S0          = _mm_blend_epi16(tmp, S1, 0xf0); // {D,C,B,A}
-    S1          = _mm_alignr_epi8(S1, tmp, 8);    // {H,G,F,E}
-    _mm_storeu_si128((__m128i*)out,      S0);
-    _mm_storeu_si128((__m128i*)(out+16), S1);
+    // Rearrange S0={A,B,E,F}, S1={C,D,G,H} into digest byte order ABCDEFGH,
+    // then byte-swap each 32-bit word to produce big-endian output (matching
+    // the generic and ARM implementations).
+    __m128i tmp = _mm_shuffle_epi32(S0, 0x1b);       /* {F,E,B,A} dword[3..0] */
+    S1          = _mm_shuffle_epi32(S1, 0xb1);        /* {D,C,H,G} */
+    S0          = _mm_blend_epi16(tmp, S1, 0xf0);     /* {D,C,B,A} */
+    S1          = _mm_alignr_epi8(S1, tmp, 8);        /* {H,G,F,E} */
+    /* pshufb mask: reverses bytes within each 32-bit lane (native→big-endian) */
+    const __m128i bswap = _mm_set_epi8(12,13,14,15, 8,9,10,11, 4,5,6,7, 0,1,2,3);
+    _mm_storeu_si128((__m128i*)out,      _mm_shuffle_epi8(S0, bswap));
+    _mm_storeu_si128((__m128i*)(out+16), _mm_shuffle_epi8(S1, bswap));
 }
 #undef ROTR
 #undef S0
