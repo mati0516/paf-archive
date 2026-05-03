@@ -148,8 +148,65 @@ static void fill_chunk(chunk_ctx_t* c, uint32_t start, uint32_t end,
 
 #if defined(_WIN32) && !defined(PAF_CI_BUILD)
 
+// Single-threaded pass to create all parent directories before parallel write.
+// Eliminates ensure_dir syscalls from the hot per-file path; last_dir cache makes
+// this O(unique dirs) rather than O(files) when paths are lexicographically sorted.
+static void pre_create_dirs(uint32_t n, const char (*paths)[1024],
+                             const uint8_t* io_failed, const uint8_t* hash_ok,
+                             const char* out_dir) {
+    char last_dir[2048] = {0};
+    for (uint32_t i = 0; i < n; i++) {
+        if (io_failed[i] || !hash_ok[i] || paths[i][0] == '\0') continue;
+        char out_path[2048];
+        snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, paths[i]);
+        char dir[2048];
+        strncpy(dir, out_path, sizeof(dir) - 1);
+        dir[sizeof(dir) - 1] = '\0';
+        char* sep = strrchr(dir, '/');
+        char* bk  = strrchr(dir, '\\');
+        if (!sep || (bk && bk > sep)) sep = bk;
+        if (sep) *sep = '\0';
+        if (strcmp(dir, last_dir) != 0) {
+            ensure_dir(out_path);
+            strncpy(last_dir, dir, sizeof(last_dir) - 1);
+            last_dir[sizeof(last_dir) - 1] = '\0';
+        }
+    }
+}
+
+// CreateFile/WriteFile/CloseHandle bypasses CRT buffer alloc+copy per file.
+// Directories are pre-created by pre_create_dirs(); ensure_dir here is a fallback
+// for any path the pre-pass missed (e.g. files with no parent dir component).
+static void write_chunk_win(chunk_ctx_t* c) {
+    for (uint32_t i = c->start; i < c->end; i++) {
+        if (c->io_failed[i] || !c->hash_ok[i] || c->paths[i][0] == '\0') continue;
+        char out_path[2048];
+        if (snprintf(out_path, sizeof(out_path), "%s/%s",
+                     c->out_dir, c->paths[i]) >= (int)sizeof(out_path)) continue;
+
+        HANDLE h = CreateFileA(out_path, GENERIC_WRITE, 0, NULL,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE) {
+            ensure_dir(out_path);
+            h = CreateFileA(out_path, GENERIC_WRITE, 0, NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (h == INVALID_HANDLE_VALUE) { c->errors++; continue; }
+        }
+
+        if (c->sizes[i] > 0) {
+            DWORD written = 0;
+            if (!WriteFile(h, c->flat + c->offsets[i], (DWORD)c->sizes[i],
+                           &written, NULL) || written != (DWORD)c->sizes[i])
+                c->errors++;
+        }
+        CloseHandle(h);
+    }
+}
+
+#define WRITE_THREADS_MAX 128
+
 static DWORD WINAPI write_chunk_fn(LPVOID arg) {
-    write_chunk((chunk_ctx_t*)arg);
+    write_chunk_win((chunk_ctx_t*)arg);
     return 0;
 }
 
@@ -161,44 +218,50 @@ static uint32_t phase3_write_parallel(
 {
     if (n == 0) return 0;
 
+    pre_create_dirs(n, paths, io_failed, hash_ok, out_dir);
+
     SYSTEM_INFO si;
     GetSystemInfo(&si);
-    int nt = (int)si.dwNumberOfProcessors * 2;
-    if (nt > MAXIMUM_WAIT_OBJECTS) nt = MAXIMUM_WAIT_OBJECTS;
+    int nt = (int)si.dwNumberOfProcessors * 4;
+    if (nt > WRITE_THREADS_MAX) nt = WRITE_THREADS_MAX;
     if (nt < 1) nt = 1;
     if ((uint32_t)nt > n) nt = (int)n;
 
-    chunk_ctx_t* ctx = (chunk_ctx_t*)calloc(nt, sizeof(chunk_ctx_t));
-    if (!ctx) {
+    chunk_ctx_t* ctx     = (chunk_ctx_t*)calloc(nt, sizeof(chunk_ctx_t));
+    HANDLE*      handles = ctx ? (HANDLE*)calloc(nt, sizeof(HANDLE)) : NULL;
+    if (!ctx || !handles) {
+        free(ctx); free(handles);
         chunk_ctx_t c;
         memset(&c, 0, sizeof(c));
         fill_chunk(&c, 0, n, paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
-        write_chunk(&c);
+        write_chunk_win(&c);
         return c.errors;
     }
 
-    HANDLE handles[MAXIMUM_WAIT_OBJECTS];
-    memset(handles, 0, sizeof(handles));
     for (int t = 0; t < nt; t++) {
         uint32_t start = (uint32_t)((uint64_t)t * n / nt);
         uint32_t end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
         fill_chunk(&ctx[t], start, end,
                    paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
         handles[t] = CreateThread(NULL, 0, write_chunk_fn, &ctx[t], 0, NULL);
-        if (!handles[t]) write_chunk(&ctx[t]);  // run inline on thread creation failure
+        if (!handles[t]) write_chunk_win(&ctx[t]);
     }
 
-    HANDLE valid[MAXIMUM_WAIT_OBJECTS];
-    int n_valid = 0;
-    for (int t = 0; t < nt; t++)
-        if (handles[t]) valid[n_valid++] = handles[t];
-    if (n_valid > 0)
-        WaitForMultipleObjects(n_valid, valid, TRUE, INFINITE);
+    // WaitForMultipleObjects is capped at MAXIMUM_WAIT_OBJECTS (64); batch as needed.
+    for (int base = 0; base < nt; base += MAXIMUM_WAIT_OBJECTS) {
+        HANDLE batch[MAXIMUM_WAIT_OBJECTS];
+        int batch_n = 0;
+        for (int t = base; t < nt && t < base + MAXIMUM_WAIT_OBJECTS; t++)
+            if (handles[t]) batch[batch_n++] = handles[t];
+        if (batch_n > 0)
+            WaitForMultipleObjects(batch_n, batch, TRUE, INFINITE);
+    }
     for (int t = 0; t < nt; t++)
         if (handles[t]) CloseHandle(handles[t]);
 
     uint32_t total = 0;
     for (int t = 0; t < nt; t++) total += ctx[t].errors;
+    free(handles);
     free(ctx);
     return total;
 }

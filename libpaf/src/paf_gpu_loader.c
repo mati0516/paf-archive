@@ -3,6 +3,14 @@
 #include "paf_vulkan.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Returns 1 if the env var is set to a non-empty, non-"0" value ("1" being the typical use). */
+static int env_is_disabled(const char* name) {
+    const char* v = getenv(name);
+    return v && v[0] != '\0' && v[0] != '0';
+}
 
 paf_cuda_hash_flat_fn   g_paf_cuda_hash_flat   = NULL;
 // paf_vulkan_hash_flat is a real function in paf_vulkan.c; point to it unconditionally.
@@ -21,50 +29,54 @@ int paf_gpu_init(void) {
     g_dstorage_avail = 0;
 
     /* --- CUDA --- */
+    if (!env_is_disabled("PAF_DISABLE_CUDA")) {
 #ifdef PAF_USE_CUDA
-    /* CUDA kernels are statically linked (paf_cuda_kernels.obj -> libpaf.dll);
-       no external paf_cuda.dll exists, so call the symbols directly. */
-    {
-        extern int paf_cuda_init(void);
-        extern int paf_cuda_hash_flat(const uint8_t*, const uint64_t*, const uint64_t*,
-                                      uint32_t, uint8_t*);
-        if (paf_cuda_init() == 0) {
-            g_paf_cuda_hash_flat = paf_cuda_hash_flat;
-            g_cuda_avail = 1;
-        }
-    }
-#else
-    {
-        HMODULE hcuda = LoadLibraryA("paf_cuda.dll");
-        if (hcuda) {
-            typedef int (*init_fn)(void);
-            init_fn              cuda_init  = (init_fn)             (uintptr_t)GetProcAddress(hcuda, "paf_cuda_init");
-            paf_cuda_hash_flat_fn hash_flat = (paf_cuda_hash_flat_fn)(uintptr_t)GetProcAddress(hcuda, "paf_cuda_hash_flat");
-
-            if (cuda_init && hash_flat && cuda_init() == 0) {
-                g_paf_cuda_hash_flat = hash_flat;
+        /* CUDA kernels are statically linked (paf_cuda_kernels.obj -> libpaf.dll);
+           no external paf_cuda.dll exists, so call the symbols directly. */
+        {
+            extern int paf_cuda_init(void);
+            extern int paf_cuda_hash_flat(const uint8_t*, const uint64_t*, const uint64_t*,
+                                          uint32_t, uint8_t*);
+            if (paf_cuda_init() == 0) {
+                g_paf_cuda_hash_flat = paf_cuda_hash_flat;
                 g_cuda_avail = 1;
-            } else {
-                FreeLibrary(hcuda);
             }
         }
-    }
+#else
+        {
+            HMODULE hcuda = LoadLibraryA("paf_cuda.dll");
+            if (hcuda) {
+                typedef int (*init_fn)(void);
+                init_fn               cuda_init = (init_fn)              (uintptr_t)GetProcAddress(hcuda, "paf_cuda_init");
+                paf_cuda_hash_flat_fn hash_flat  = (paf_cuda_hash_flat_fn)(uintptr_t)GetProcAddress(hcuda, "paf_cuda_hash_flat");
+
+                if (cuda_init && hash_flat && cuda_init() == 0) {
+                    g_paf_cuda_hash_flat = hash_flat;
+                    g_cuda_avail = 1;
+                } else {
+                    FreeLibrary(hcuda);
+                }
+            }
+        }
 #endif
+    }
 
     /* --- DirectStorage --- */
-    HMODULE hds = LoadLibraryA("dstorage.dll");
-    if (hds) {
-        if (GetProcAddress(hds, "DStorageGetFactory") != NULL) {
-            g_dstorage_avail = 1;
+    if (!env_is_disabled("PAF_DISABLE_DSTORAGE")) {
+        HMODULE hds = LoadLibraryA("dstorage.dll");
+        if (hds) {
+            if (GetProcAddress(hds, "DStorageGetFactory") != NULL)
+                g_dstorage_avail = 1;
+            /* Keep loaded so PafDirectStorage can also LoadLibrary it without re-mapping.
+               The OS reference-counts the module so two LoadLibrary calls are cheap. */
+            FreeLibrary(hds);
         }
-        /* Keep loaded so PafDirectStorage can also LoadLibrary it without re-mapping.
-           The OS reference-counts the module so two LoadLibrary calls are cheap.    */
-        FreeLibrary(hds);
     }
 
     /* --- Vulkan: probe now so the result feeds into the bitmask.
          paf_vulkan_init() is idempotent; state lives in paf_vulkan.c. --- */
-    paf_vulkan_init();
+    if (!env_is_disabled("PAF_DISABLE_VULKAN"))
+        paf_vulkan_init();
 
     return (g_cuda_avail     ? PAF_GPU_CUDA     : 0)
          | (g_dstorage_avail ? PAF_GPU_DSTORAGE : 0)

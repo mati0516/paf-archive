@@ -102,7 +102,11 @@ typedef uint64_t VkDeviceSize;
 #define VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT  0x00000800
 #define VK_ACCESS_SHADER_WRITE_BIT            0x00000040
 
-typedef struct { uint32_t sType; const void* pNext; uint32_t apiVersion; } VkApplicationInfo;
+typedef struct { uint32_t sType; const void* pNext;
+                 const char* pApplicationName; uint32_t applicationVersion;
+                 const char* pEngineName;      uint32_t engineVersion;
+                 uint32_t apiVersion; } VkApplicationInfo;
+#define VK_API_VERSION_1_0 ((uint32_t)(1u << 22))
 typedef struct { uint32_t sType; const void* pNext; VkFlags flags;
                  const VkApplicationInfo* pApplicationInfo;
                  uint32_t enabledLayerCount; const char* const* ppEnabledLayerNames;
@@ -279,7 +283,8 @@ int paf_vulkan_init(void) {
     LOAD_VK(vkGetDeviceQueue)
 
     // Create instance
-    VkApplicationInfo ai = { VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL, 1 };
+    VkApplicationInfo ai = { VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL,
+                              NULL, 0, NULL, 0, VK_API_VERSION_1_0 };
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, NULL, 0,
                                   &ai, 0, NULL, 0, NULL };
     if (vk_vkCreateInstance(&ici, NULL, &s_instance) != VK_SUCCESS) goto fail;
@@ -438,7 +443,13 @@ fail:
     return 0;
 }
 
+static int vulkan_env_disabled(void) {
+    const char* v = getenv("PAF_DISABLE_VULKAN");
+    return v && v[0] != '\0' && v[0] != '0';
+}
+
 int paf_vulkan_is_available(void) {
+    if (vulkan_env_disabled()) return 0;
     if (s_avail < 0) paf_vulkan_init();
     return s_avail;
 }

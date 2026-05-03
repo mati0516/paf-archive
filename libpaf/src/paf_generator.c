@@ -14,11 +14,31 @@
 #define _strdup strdup
 #endif
 
+/* Windows tmpfile() writes to C:\ root which requires admin rights.
+   Use GetTempPath + GetTempFileName + _wfopen for a safe alternative. */
+#if defined(_WIN32) && !defined(__ANDROID__) && !defined(__linux__)
+static FILE* paf_tmpfile(void) {
+    WCHAR tmp_dir[MAX_PATH];
+    WCHAR tmp_path[MAX_PATH];
+    if (GetTempPathW(MAX_PATH, tmp_dir) == 0) return NULL;
+    if (GetTempFileNameW(tmp_dir, L"paf", 0, tmp_path) == 0) return NULL;
+    FILE* f = _wfopen(tmp_path, L"w+bD");  /* D = delete on close */
+    if (!f) {
+        /* Fallback: open and manually delete */
+        f = _wfopen(tmp_path, L"w+b");
+        if (f) DeleteFileW(tmp_path);
+    }
+    return f;
+}
+#else
+#define paf_tmpfile() tmpfile()
+#endif
+
 int paf_generator_init(paf_generator_t* gen) {
     if (!gen) return -1;
-    gen->data_tmp = tmpfile();
-    gen->index_tmp = tmpfile();
-    gen->path_tmp = tmpfile();
+    gen->data_tmp  = paf_tmpfile();
+    gen->index_tmp = paf_tmpfile();
+    gen->path_tmp  = paf_tmpfile();
     gen->current_data_offset = 0;
     gen->current_path_offset = 0;
     gen->file_count = 0;
