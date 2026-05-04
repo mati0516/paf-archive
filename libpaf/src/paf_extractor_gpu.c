@@ -175,8 +175,7 @@ static void pre_create_dirs(uint32_t n, const char (*paths)[1024],
 }
 
 // CreateFile/WriteFile/CloseHandle bypasses CRT buffer alloc+copy per file.
-// Directories are pre-created by pre_create_dirs(); ensure_dir here is a fallback
-// for any path the pre-pass missed (e.g. files with no parent dir component).
+// Directories are pre-created by pre_create_dirs(); ensure_dir here is a fallback.
 static void write_chunk_win(chunk_ctx_t* c) {
     for (uint32_t i = c->start; i < c->end; i++) {
         if (c->io_failed[i] || !c->hash_ok[i] || c->paths[i][0] == '\0') continue;
@@ -192,7 +191,6 @@ static void write_chunk_win(chunk_ctx_t* c) {
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
             if (h == INVALID_HANDLE_VALUE) { c->errors++; continue; }
         }
-
         if (c->sizes[i] > 0) {
             DWORD written = 0;
             if (!WriteFile(h, c->flat + c->offsets[i], (DWORD)c->sizes[i],
@@ -231,8 +229,7 @@ static uint32_t phase3_write_parallel(
     HANDLE*      handles = ctx ? (HANDLE*)calloc(nt, sizeof(HANDLE)) : NULL;
     if (!ctx || !handles) {
         free(ctx); free(handles);
-        chunk_ctx_t c;
-        memset(&c, 0, sizeof(c));
+        chunk_ctx_t c; memset(&c, 0, sizeof(c));
         fill_chunk(&c, 0, n, paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
         write_chunk_win(&c);
         return c.errors;
@@ -247,10 +244,8 @@ static uint32_t phase3_write_parallel(
         if (!handles[t]) write_chunk_win(&ctx[t]);
     }
 
-    // WaitForMultipleObjects is capped at MAXIMUM_WAIT_OBJECTS (64); batch as needed.
     for (int base = 0; base < nt; base += MAXIMUM_WAIT_OBJECTS) {
-        HANDLE batch[MAXIMUM_WAIT_OBJECTS];
-        int batch_n = 0;
+        HANDLE batch[MAXIMUM_WAIT_OBJECTS]; int batch_n = 0;
         for (int t = base; t < nt && t < base + MAXIMUM_WAIT_OBJECTS; t++)
             if (handles[t]) batch[batch_n++] = handles[t];
         if (batch_n > 0)
@@ -355,8 +350,19 @@ int paf_extractor_gpu_run(paf_extractor_t* ext,
            paf_dstorage_is_available() ? "DirectStorage (batch)" : "fread");
     printf("Extracting %u file(s) to %s\n", ext->header.file_count, out_dir);
 
+    /* Compute actual average file size so the batch covers as many files as
+       VRAM allows in one pass, avoiding repeated Phase-1/2 overhead.
+       Hardcoding 1 MB would produce ~7732-file batches for 8.85 KB avg files
+       (26 passes), whereas the real avg fits all 200K in a single batch. */
+    uint64_t total_data_size = 0;
+    for (uint32_t i = 0; i < ext->header.file_count; i++)
+        total_data_size += ext->entries[i].data_size;
+    uint64_t actual_avg = ext->header.file_count > 0
+                          ? total_data_size / ext->header.file_count : (1024 * 1024);
+    if (actual_avg < 1) actual_avg = 1;
+
     paf_batch_config_t batch = paf_gpu_calculate_batch(
-        gpu.total_vram, ext->header.file_count, 1024 * 1024);
+        gpu.total_vram, ext->header.file_count, actual_avg);
 
     uint32_t io_errors   = 0;
     uint32_t hash_errors = 0;
