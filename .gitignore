@@ -218,13 +218,11 @@ test/*
 *.ilk
 
 # Prebuilt binaries (CUDA + DirectStorage full build) — explicitly tracked
-!/libpaf.dll
-!/libpaf.lib
-!/bench/libpaf.dll
-!/bench/libpaf.lib
-!/bench/bench_paf.exe
-!/bench/dstorage.dll
-!/bench/dstoragecore.dll
+!/bin/libpaf.dll
+!/bin/dstorage.dll
+!/bin/dstoragecore.dll
+!/bin/bench_paf.exe
+!/lib/libpaf.lib
 
 # Temp / debug test sources from dev sessions
 /bench/tmptest.c
