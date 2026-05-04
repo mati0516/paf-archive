@@ -15,7 +15,19 @@ It eliminates I/O bottlenecks for large file collections by batching hash comput
 
 ## Performance
 
-> Benchmarks coming soon.
+Benchmarked on Windows 11 — NVIDIA GeForce RTX 2080 (8 GB VRAM), NVMe SSD, 200,000 files (~8.9 KB average, 1.77 GB total).
+
+| Mode | Time | Notes |
+|:---|---:|:---|
+| **GPU creation** | **18.7 sec** | CUDA SHA-256, single-pass batch |
+| CPU creation | 1,387 sec | Sequential CPU SHA-256 |
+| GPU extraction (CUDA) | 191 sec | Phase 1 fread → Phase 2 CUDA → Phase 3 parallel write |
+| GPU extraction (CUDA + DirectStorage) | 191 sec | Phase 1 via DirectStorage batch |
+| CPU extraction (parallel) | 201 sec | CPU SHA-256, NVMe-aware thread pool |
+
+> **Extraction bottleneck:** Phase 3 (file creation) accounts for ~186 of the ~191 seconds.  
+> On NTFS, `CreateFile` + `CloseHandle` serialise on the per-volume MFT lock regardless of storage speed.  
+> Extraction to ReFS, exFAT, or a RAM disk removes this ceiling entirely.
 
 ## GPU Priority Order
 
@@ -145,9 +157,29 @@ paf_patch_apply_atomic("patch_v1_v2.paf", "/game/installed", NULL, NULL);
 
 Call `paf_delta_optimize_io` to sort delta entries by offset, maximising sequential I/O throughput.
 
+## Prebuilt Binaries
+
+Pre-compiled Windows x64 binaries (CUDA 13.2 + DirectStorage 1.2.2) are included for users who cannot build from source:
+
+```
+bin/
+  libpaf.dll          Full GPU build (CUDA + DirectStorage + Vulkan)
+  dstorage.dll        DirectStorage 1.2.2 runtime — must be next to libpaf.dll
+  dstoragecore.dll    DirectStorage 1.2.2 core
+  bench_paf.exe       Standalone benchmark executable
+
+lib/
+  libpaf.lib          Import library for linking against libpaf.dll
+```
+
+To use the prebuilt DLL, copy `bin/libpaf.dll`, `bin/dstorage.dll`, and `bin/dstoragecore.dll` next to your application.  
+Link against `lib/libpaf.lib` and include headers from `libpaf/include/`.
+
 ## Directory Structure
 
 ```
+bin/                    Prebuilt Windows x64 binaries (DLLs + benchmark exe)
+lib/                    Import library (libpaf.lib)
 libpaf/
   include/              Public C headers
     paf.h               Format definitions (paf_header_t, paf_index_entry_t, flags)
