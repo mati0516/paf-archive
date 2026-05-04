@@ -222,6 +222,7 @@ test/*
 !/bin/dstorage.dll
 !/bin/dstoragecore.dll
 !/bin/bench_paf.exe
+!/bin/paf_extract.exe
 !/lib/libpaf.lib
 
 # Temp / debug test sources from dev sessions
