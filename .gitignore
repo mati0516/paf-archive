@@ -205,6 +205,7 @@ test/*
 /bench/*.paf
 /bench/extracted/
 /bench/archives/
+/bench/data/
 /bench_win_data/
 /build_android/
 /build_linux/
@@ -215,6 +216,25 @@ test/*
 *.exp
 *.pdb
 *.ilk
+
+# Prebuilt binaries (CUDA + DirectStorage full build) — explicitly tracked
+!/libpaf.dll
+!/libpaf.lib
+!/bench/libpaf.dll
+!/bench/libpaf.lib
+!/bench/bench_paf.exe
+!/bench/dstorage.dll
+!/bench/dstoragecore.dll
+
+# Temp / debug test sources from dev sessions
+/bench/tmptest.c
+/bench/tmptest2.c
+/bench/dbgtest.c
+/bench/createtest.c
+/bench/build_bench.ps1
+/bench/run_benchmarks.ps1
+/nuget.exe
+/Microsoft.Direct3D.DirectStorage*/
 
 # AI Agent configuration
 .clineruleslocal_build/
