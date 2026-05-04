@@ -13,6 +13,9 @@
 #include <windows.h>
 #include <direct.h>
 #define MKDIR(p) _mkdir(p)
+#if !defined(PAF_CI_BUILD)
+#include <winioctl.h>   /* IOCTL_STORAGE_QUERY_PROPERTY, BusTypeNvme */
+#endif
 #else
 #include <unistd.h>
 #define MKDIR(p) mkdir(p, 0755)
@@ -101,6 +104,9 @@ typedef struct {
     const char*     out_dir;
     char            last_dir[2048];
     uint32_t        errors;  // owned exclusively by this thread
+#if defined(_WIN32) && !defined(PAF_CI_BUILD)
+    void*           psa;     // SECURITY_ATTRIBUTES* (NULL DACL on NVMe), or NULL
+#endif
 } chunk_ctx_t;
 
 static void write_chunk(chunk_ctx_t* c) {
@@ -144,13 +150,91 @@ static void fill_chunk(chunk_ctx_t* c, uint32_t start, uint32_t end,
     c->start = start; c->end = end;
     c->paths = paths; c->io_failed = io_failed; c->hash_ok = hash_ok;
     c->offsets = offsets; c->sizes = sizes; c->flat = flat; c->out_dir = out_dir;
+#if defined(_WIN32) && !defined(PAF_CI_BUILD)
+    c->psa = NULL;
+#endif
 }
 
 #if defined(_WIN32) && !defined(PAF_CI_BUILD)
 
-// Single-threaded pass to create all parent directories before parallel write.
-// Eliminates ensure_dir syscalls from the hot per-file path; last_dir cache makes
-// this O(unique dirs) rather than O(files) when paths are lexicographically sorted.
+// ── NVMe detection ────────────────────────────────────────────────────────────
+// Uses IOCTL_STORAGE_QUERY_PROPERTY to read the BusType for the volume that
+// contains `path`. Works with relative paths via GetVolumePathNameA.
+
+static int g_nvme_detected  = -1;  /* -1 = unknown, 0 = no, 1 = yes */
+static int g_refs_detected  = -1;
+
+static int detect_nvme(const char* path) {
+    if (g_nvme_detected >= 0) return g_nvme_detected;
+
+    char vol[MAX_PATH] = {0};
+    if (!GetVolumePathNameA(path && path[0] ? path : ".", vol, MAX_PATH)) {
+        g_nvme_detected = 0; return 0;
+    }
+    /* vol is e.g. "H:\" — convert to "\\.\H:" */
+    if (strlen(vol) < 2 || vol[1] != ':') { g_nvme_detected = 0; return 0; }
+    char devpath[16];
+    snprintf(devpath, sizeof(devpath), "\\\\.\\%c:", vol[0]);
+
+    HANDLE hDev = CreateFileA(devpath, 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL, OPEN_EXISTING, 0, NULL);
+    if (hDev == INVALID_HANDLE_VALUE) { g_nvme_detected = 0; return 0; }
+
+    STORAGE_PROPERTY_QUERY q;
+    q.PropertyId = StorageDeviceProperty;
+    q.QueryType  = PropertyStandardQuery;
+    q.AdditionalParameters[0] = 0;
+
+    char buf[512]; DWORD ret = 0;
+    BOOL ok = DeviceIoControl(hDev, IOCTL_STORAGE_QUERY_PROPERTY,
+                              &q, sizeof(q), buf, sizeof(buf), &ret, NULL);
+    CloseHandle(hDev);
+
+    if (ok && ret >= sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
+        STORAGE_DEVICE_DESCRIPTOR* d = (STORAGE_DEVICE_DESCRIPTOR*)buf;
+        g_nvme_detected = (d->BusType == BusTypeNvme) ? 1 : 0;
+    } else {
+        g_nvme_detected = 0;
+    }
+    return g_nvme_detected;
+}
+
+static int detect_refs(const char* path) {
+    if (g_refs_detected >= 0) return g_refs_detected;
+    char vol[MAX_PATH] = {0};
+    if (!GetVolumePathNameA(path && path[0] ? path : ".", vol, MAX_PATH)) {
+        g_refs_detected = 0; return 0;
+    }
+    char fs[32] = {0};
+    GetVolumeInformationA(vol, NULL, 0, NULL, NULL, NULL, fs, sizeof(fs));
+    g_refs_detected = (strcmp(fs, "ReFS") == 0) ? 1 : 0;
+    return g_refs_detected;
+}
+
+// ── NULL DACL security attributes ─────────────────────────────────────────────
+// Passing a NULL DACL to CreateFile tells the kernel to skip security-descriptor
+// inheritance from the parent directory — avoids a hidden ACL lookup per file.
+
+static SECURITY_DESCRIPTOR g_null_sd;
+static SECURITY_ATTRIBUTES g_null_dacl_sa;
+static volatile LONG       g_null_dacl_init = 0;
+
+static SECURITY_ATTRIBUTES* get_null_dacl_sa(void) {
+    if (!g_null_dacl_init) {
+        InitializeSecurityDescriptor(&g_null_sd, SECURITY_DESCRIPTOR_REVISION);
+        SetSecurityDescriptorDacl(&g_null_sd, TRUE, NULL, FALSE);
+        g_null_dacl_sa.nLength              = sizeof(SECURITY_ATTRIBUTES);
+        g_null_dacl_sa.lpSecurityDescriptor = &g_null_sd;
+        g_null_dacl_sa.bInheritHandle       = FALSE;
+        InterlockedExchange(&g_null_dacl_init, 1);
+    }
+    return &g_null_dacl_sa;
+}
+
+// ── Directory pre-creation ────────────────────────────────────────────────────
+// Single-threaded pass; last_dir cache makes this O(unique dirs).
+
 static void pre_create_dirs(uint32_t n, const char (*paths)[1024],
                              const uint8_t* io_failed, const uint8_t* hash_ok,
                              const char* out_dir) {
@@ -174,20 +258,23 @@ static void pre_create_dirs(uint32_t n, const char (*paths)[1024],
     }
 }
 
-// CreateFile/WriteFile/CloseHandle bypasses CRT buffer alloc+copy per file.
-// Directories are pre-created by pre_create_dirs(); ensure_dir here is a fallback.
+// ── Per-thread write worker ───────────────────────────────────────────────────
+// Uses Win32 CreateFile/WriteFile/CloseHandle (avoids CRT malloc per fopen).
+// When psa is non-NULL (NVMe path) a NULL-DACL descriptor skips ACL inheritance.
+
 static void write_chunk_win(chunk_ctx_t* c) {
+    SECURITY_ATTRIBUTES* psa = (SECURITY_ATTRIBUTES*)c->psa;
     for (uint32_t i = c->start; i < c->end; i++) {
         if (c->io_failed[i] || !c->hash_ok[i] || c->paths[i][0] == '\0') continue;
         char out_path[2048];
         if (snprintf(out_path, sizeof(out_path), "%s/%s",
                      c->out_dir, c->paths[i]) >= (int)sizeof(out_path)) continue;
 
-        HANDLE h = CreateFileA(out_path, GENERIC_WRITE, 0, NULL,
+        HANDLE h = CreateFileA(out_path, GENERIC_WRITE, 0, psa,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (h == INVALID_HANDLE_VALUE) {
             ensure_dir(out_path);
-            h = CreateFileA(out_path, GENERIC_WRITE, 0, NULL,
+            h = CreateFileA(out_path, GENERIC_WRITE, 0, psa,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
             if (h == INVALID_HANDLE_VALUE) { c->errors++; continue; }
         }
@@ -201,7 +288,9 @@ static void write_chunk_win(chunk_ctx_t* c) {
     }
 }
 
-#define WRITE_THREADS_MAX 128
+// NVMe: maximum thread cap is doubled (NVMe queue depth handles deeper parallelism).
+#define WRITE_THREADS_MAX_STD   128
+#define WRITE_THREADS_MAX_NVME  256
 
 static DWORD WINAPI write_chunk_fn(LPVOID arg) {
     write_chunk_win((chunk_ctx_t*)arg);
@@ -218,10 +307,17 @@ static uint32_t phase3_write_parallel(
 
     pre_create_dirs(n, paths, io_failed, hash_ok, out_dir);
 
+    /* NVMe: more threads saturate the deeper I/O queue, plus use NULL DACL
+       to skip per-file security-descriptor inheritance lookups.         */
+    int is_nvme = detect_nvme(out_dir);
+    int thread_mul = is_nvme ? 8 : 4;
+    int thread_cap = is_nvme ? WRITE_THREADS_MAX_NVME : WRITE_THREADS_MAX_STD;
+    SECURITY_ATTRIBUTES* psa = is_nvme ? get_null_dacl_sa() : NULL;
+
     SYSTEM_INFO si;
     GetSystemInfo(&si);
-    int nt = (int)si.dwNumberOfProcessors * 4;
-    if (nt > WRITE_THREADS_MAX) nt = WRITE_THREADS_MAX;
+    int nt = (int)si.dwNumberOfProcessors * thread_mul;
+    if (nt > thread_cap) nt = thread_cap;
     if (nt < 1) nt = 1;
     if ((uint32_t)nt > n) nt = (int)n;
 
@@ -231,6 +327,7 @@ static uint32_t phase3_write_parallel(
         free(ctx); free(handles);
         chunk_ctx_t c; memset(&c, 0, sizeof(c));
         fill_chunk(&c, 0, n, paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
+        c.psa = psa;
         write_chunk_win(&c);
         return c.errors;
     }
@@ -240,6 +337,7 @@ static uint32_t phase3_write_parallel(
         uint32_t end   = (t == nt - 1) ? n : (uint32_t)((uint64_t)(t + 1) * n / nt);
         fill_chunk(&ctx[t], start, end,
                    paths, io_failed, hash_ok, offsets, sizes, flat, out_dir);
+        ctx[t].psa = psa;
         handles[t] = CreateThread(NULL, 0, write_chunk_fn, &ctx[t], 0, NULL);
         if (!handles[t]) write_chunk_win(&ctx[t]);
     }
@@ -348,6 +446,16 @@ int paf_extractor_gpu_run(paf_extractor_t* ext,
          : "CPU fallback");
     printf("  Fast I/O        : %s\n",
            paf_dstorage_is_available() ? "DirectStorage (batch)" : "fread");
+#if defined(_WIN32) && !defined(PAF_CI_BUILD)
+    {
+        int nvme = detect_nvme(out_dir);
+        int refs = detect_refs(out_dir);
+        printf("  Storage         : %s / %s%s\n",
+               nvme ? "NVMe" : "non-NVMe",
+               refs ? "ReFS" : "NTFS",
+               nvme ? " (NULL-DACL + 8x threads)" : " (4x threads)");
+    }
+#endif
     printf("Extracting %u file(s) to %s\n", ext->header.file_count, out_dir);
 
     /* Compute actual average file size so the batch covers as many files as
