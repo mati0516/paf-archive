@@ -1,7 +1,7 @@
 const translations = {
     "en": {
         "title": "📦 PAF Web Tool",
-        "subtitle": "Open container · AV-transparent · SHA-256 per file",
+        "subtitle": "Open container · AntiVirus-transparent · SHA-256 per file",
         "tab_viewer": "Viewer (Extract)",
         "tab_package": "Package (Create)",
         "drop_view": "Drop a .paf file here to view and verify",
@@ -38,7 +38,7 @@ const translations = {
     },
     "ja": {
         "title": "📦 PAF Web ツール",
-        "subtitle": "オープンコンテナ · AVスキャン透過 · ファイルごとのSHA-256",
+        "subtitle": "オープンコンテナ · AntiVirus透過 · ファイルごとのSHA-256",
         "tab_viewer": "閲覧 (Viewer)",
         "tab_package": "まとめる (Package)",
         "drop_view": "ここに .paf ファイルをドロップして閲覧・検証",

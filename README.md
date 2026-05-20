@@ -1,13 +1,13 @@
 # PAF — Platform Archive Format
 
 PAF is an open, **uncompressed** container format with per-file SHA-256 integrity built into the index.  
-Designed for environments where AV transparency, DLP inspectability, and tamper detection matter more than compression ratio.
+Designed for environments where AntiVirus transparency, DLP inspectability, and tamper detection matter more than compression ratio.
 
 ## The problem with zip
 
 Compressed archives create friction in enterprise and internal distribution:
 
-- AV scanners cannot fully inspect compressed or encrypted contents
+- AntiVirus scanners cannot fully inspect compressed or encrypted contents
 - DLP tools cannot classify what they cannot read
 - Users must extract before using — and many don't know how
 - Integrity requires a separate manifest file; there is no per-file hash in the format itself
@@ -18,8 +18,8 @@ PAF eliminates these problems by keeping data uncompressed and embedding SHA-256
 
 | Property | zip (deflate) | zip (store) | PAF |
 |:---|:---:|:---:|:---:|
-| AV can scan file data directly | partial | ✓ | ✓ |
-| AV can hash-check without reading data | ✗ | ✗ | ✓ |
+| AntiVirus can scan file data directly | partial | ✓ | ✓ |
+| AntiVirus can hash-check without reading data | ✗ | ✗ | ✓ |
 | DLP can inspect all contents | partial | ✓ | ✓ |
 | Per-file SHA-256 in the format | ✗ | ✗ | ✓ |
 | Random access to a single file | ✓ | ✓ | ✓ |
@@ -27,9 +27,9 @@ PAF eliminates these problems by keeping data uncompressed and embedding SHA-256
 
 ## Key properties
 
-### AV Transparency
-File data is stored uncompressed — AV engines can read it directly from the archive without decompression.  
-More importantly, every file's SHA-256 is stored in the index. A hash-aware AV engine can check all N entries against its malware database by reading only the index block, never touching the data block at all.
+### AntiVirus Transparency
+File data is stored uncompressed — AntiVirus engines can read it directly from the archive without decompression.  
+More importantly, every file's SHA-256 is stored in the index. A hash-aware AntiVirus engine can check all N entries against its malware database by reading only the index block, never touching the data block at all.
 
 ### Built-in Integrity
 SHA-256 for every file is recorded at creation time and lives inside the archive. Recipients and automated pipelines can verify the full contents with no separate manifest, no side-channel signature file.
@@ -38,7 +38,7 @@ SHA-256 for every file is recorded at creation time and lives inside the archive
 Because hashes are in the index, `paf_delta_calculate` compares two archives in O(N) time without re-reading any file data. Only the changed files need to move.
 
 ### SDK-first Design
-PAF is a format specification and a reference C library (`libpaf`). File viewers, shell extensions, AV plugins, deployment tools, and update clients are meant to be built on top. The format is simple, documented, and stable.
+PAF is a format specification and a reference C library (`libpaf`). File viewers, shell extensions, AntiVirus plugins, deployment tools, and update clients are meant to be built on top. The format is simple, documented, and stable.
 
 ## Building on PAF
 
@@ -54,7 +54,7 @@ Link against it, include the headers, and read or write PAF archives from any la
 Integrations that would make PAF useful as a platform:
 
 - **Windows Shell Extension** — browse PAF contents in Explorer, launch files directly
-- **AV Plugin** — index-level hash scan before data is touched
+- **AntiVirus Plugin** — index-level hash scan before data is touched
 - **Deployment Agent** — apply delta updates with `paf_patch_apply_atomic`
 - **WASM Viewer** — already in `wasm/`, runs in browser
 
