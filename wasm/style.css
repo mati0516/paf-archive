@@ -158,6 +158,32 @@ tr:hover {
     background-color: var(--accent-hover);
 }
 
+.btn.secondary {
+    background-color: transparent;
+    color: var(--accent-color);
+    border: 2px solid var(--accent-color);
+}
+
+.btn.secondary:hover {
+    background-color: rgba(59, 130, 246, 0.1);
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.hash-cell {
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: #94a3b8;
+    white-space: nowrap;
+}
+
+.status-ok   { color: #10b981; font-weight: 600; }
+.status-fail { color: #ef4444; font-weight: 600; }
+.status-skip { color: #64748b; }
+
 #extract-status {
     margin-top: 1rem;
     text-align: center;

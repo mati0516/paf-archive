@@ -17,7 +17,7 @@
         <div class="header-top">
             <header>
                 <h1 data-i18n="title">📦 PAF Web Tool</h1>
-                <p data-i18n="subtitle">High-speed parallel archive format</p>
+                <p data-i18n="subtitle">Open container · AV-transparent · SHA-256 per file</p>
             </header>
             <div class="lang-picker">
                 <select id="lang-select">
@@ -62,13 +62,16 @@
                             <tr>
                                 <th data-i18n="th_path">File Path</th>
                                 <th data-i18n="th_size">Size (Bytes)</th>
+                                <th data-i18n="th_hash">SHA-256</th>
+                                <th data-i18n="th_status">Status</th>
                             </tr>
                         </thead>
                         <tbody id="file-list">
                         </tbody>
                     </table>
                 </div>
-                <div style="margin-top: 1rem;">
+                <div style="margin-top: 1rem; display: flex; gap: 0.75rem;">
+                    <button id="verify-btn" class="btn secondary" data-i18n="verify_btn">Verify Integrity</button>
                     <button id="extract-local-btn" class="btn primary" data-i18n="extract_local_btn">PCのフォルダに展開 (Extract to PC)</button>
                 </div>
                 <div id="extract-status" style="margin-top: 1rem;"></div>
