@@ -1,104 +1,71 @@
-# Parallel Archive Format (PAF)
+# PAF — Platform Archive Format
 
-PAF is a high-performance, non-compressed archive format designed around GPU-parallel SHA-256 hashing and fast NVMe I/O.  
-It eliminates I/O bottlenecks for large file collections by batching hash computation on the GPU and (on Windows) using Microsoft DirectStorage for direct NVMe reads.
+PAF is an open, **uncompressed** container format with per-file SHA-256 integrity built into the index.  
+Designed for environments where AV transparency, DLP inspectability, and tamper detection matter more than compression ratio.
 
-## Key Features
+## The problem with zip
 
-- **GPU-Parallel SHA-256**: Batch hashing via CUDA (NVIDIA) or Vulkan compute (AMD/Intel/Linux/Android). Automatically falls back to CPU when no GPU is present.
-- **Runtime GPU Detection**: No compile-time flags. `libpaf.dll` / `libpaf.so` probes `paf_cuda.dll`, `libvulkan.so.1`, and `dstorage.dll` at startup and selects the best available backend.
-- **Microsoft DirectStorage v1.2.2** (Windows): NVMe→host transfers and true NVMe→GPU DMA via `DSTORAGE_REQUEST_DESTINATION_BUFFER` with no CPU involvement.
-- **O(N) Delta Engine**: Compares archives using only the embedded SHA-256 hashes — no file data re-read required.
-- **Binary Patch PAF**: `paf_create_patch` produces a compact patch archive using rsync-style block deltas for UPDATED files. `paf_patch_apply_atomic` applies it with SHA-256 verification and atomic rename.
-- **Index-Only Archives**: Lightweight `.pafi` files (metadata only, no data block) for remote delta calculation without shipping full archives.
-- **Multi-Platform**: Windows (GPU + DirectStorage), Linux (Vulkan GPU), Android ARM64.
+Compressed archives create friction in enterprise and internal distribution:
 
-## Performance
+- AV scanners cannot fully inspect compressed or encrypted contents
+- DLP tools cannot classify what they cannot read
+- Users must extract before using — and many don't know how
+- Integrity requires a separate manifest file; there is no per-file hash in the format itself
 
-Benchmarked on Windows 11 — NVIDIA GeForce RTX 2080 (8 GB VRAM), NVMe SSD, 200,000 files (~8.9 KB average, 1.77 GB total).
+PAF eliminates these problems by keeping data uncompressed and embedding SHA-256 in the index.
 
-| Mode | Time | Notes |
-|:---|---:|:---|
-| **GPU creation** | **18.7 sec** | CUDA SHA-256, single-pass batch |
-| CPU creation | 1,387 sec | Sequential CPU SHA-256 |
-| GPU extraction (CUDA) | 191 sec | Phase 1 fread → Phase 2 CUDA → Phase 3 parallel write |
-| GPU extraction (CUDA + DirectStorage) | 191 sec | Phase 1 via DirectStorage batch |
-| CPU extraction (parallel) | 201 sec | CPU SHA-256, NVMe-aware thread pool |
+## How PAF is different
 
-> **Extraction bottleneck:** Phase 3 (file creation) accounts for ~186 of the ~191 seconds.  
-> On NTFS, `CreateFile` + `CloseHandle` serialise on the per-volume MFT lock regardless of storage speed.  
-> Extraction to ReFS, exFAT, or a RAM disk removes this ceiling entirely.
+| Property | zip (deflate) | zip (store) | PAF |
+|:---|:---:|:---:|:---:|
+| AV can scan file data directly | partial | ✓ | ✓ |
+| AV can hash-check without reading data | ✗ | ✗ | ✓ |
+| DLP can inspect all contents | partial | ✓ | ✓ |
+| Per-file SHA-256 in the format | ✗ | ✗ | ✓ |
+| Random access to a single file | ✓ | ✓ | ✓ |
+| O(N) delta without re-reading files | ✗ | ✗ | ✓ |
 
-## GPU Priority Order
+## Key properties
 
-```
-CUDA (paf_cuda.dll)  →  Vulkan (libvulkan + paf_sha256.spv)  →  CPU SHA-256
-```
+### AV Transparency
+File data is stored uncompressed — AV engines can read it directly from the archive without decompression.  
+More importantly, every file's SHA-256 is stored in the index. A hash-aware AV engine can check all N entries against its malware database by reading only the index block, never touching the data block at all.
 
-All detection is lazy — no explicit initialisation call is required. The Vulkan path requires `paf_sha256.spv` (compiled from `libpaf/src/paf_sha256.comp`) in the working directory or `/usr/lib/paf/`.
+### Built-in Integrity
+SHA-256 for every file is recorded at creation time and lives inside the archive. Recipients and automated pipelines can verify the full contents with no separate manifest, no side-channel signature file.
 
-## Archive Format
+### O(N) Delta Detection
+Because hashes are in the index, `paf_delta_calculate` compares two archives in O(N) time without re-reading any file data. Only the changed files need to move.
 
-```
-[Header 32B] [Data Block] [Index Block N×64B] [Path Buffer]
-```
+### SDK-first Design
+PAF is a format specification and a reference C library (`libpaf`). File viewers, shell extensions, AV plugins, deployment tools, and update clients are meant to be built on top. The format is simple, documented, and stable.
 
-| Section | Size | Description |
-|:---|:---|:---|
-| Header | 32 B | Magic `PAF1`, version, flags, file count, index/path offsets |
-| Data Block | Variable | Raw file data, contiguous (absent when `PAF_FLAG_INDEX_ONLY`) |
-| Index Block | N × 64 B | Per-file metadata (see below) |
-| Path Buffer | Variable | UTF-8 file paths (no NUL terminator; length stored in index) |
+## Building on PAF
 
-### Index Entry Fields (64 bytes, fixed-size for GPU coalesced access)
+`libpaf` is a plain C shared library with no mandatory runtime dependencies:
 
-| Offset | Size | Field | Description |
-|:---|:---|:---|:---|
-| 0 | 8 B | `path_buffer_offset` | Byte offset within Path Buffer |
-| 8 | 4 B | `path_length` | Byte length of UTF-8 path |
-| 12 | 4 B | `flags` | `PAF_ENTRY_*` bitmask |
-| 16 | 8 B | `data_offset` | Byte offset within Data Block |
-| 24 | 8 B | `data_size` | Size of data block entry in bytes |
-| 32 | 32 B | `hash` | **SHA-256** — sole integrity checksum |
-
-> For `PAF_ENTRY_BINARY_DELTA` entries, `hash` is the SHA-256 of the file *after* applying the delta (i.e. the new file).
-
-### Header Flags (`paf_header_t.flags`)
-
-| Flag | Value | Meaning |
-|:---|:---|:---|
-| `PAF_FLAG_INDEX_ONLY` | `0x02` | Data Block absent — index-only snapshot |
-
-### Per-Entry Flags (`paf_index_entry_t.flags`)
-
-| Flag | Value | Meaning |
-|:---|:---|:---|
-| `PAF_ENTRY_DELETED` | `0x04` | File deleted; `data_size = 0`, no data |
-| `PAF_ENTRY_BINARY_DELTA` | `0x08` | Data block is a PAFD binary delta |
-
-### PAFD Binary Delta Format
-
-```
-[magic "PAFD" 4B] [instr_count 4B] [old_file_size 8B]
-N × { [type 1B] [offset 8B] [size 4B] [data if LITERAL] }
+```sh
+# Linux / CI
+gcc -O2 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -lpthread -o libpaf.so
 ```
 
-| type | Meaning |
-|:---|:---|
-| `0` COPY | Copy `size` bytes from `offset` in the old file |
-| `1` LITERAL | Emit the following `size` bytes verbatim |
+Link against it, include the headers, and read or write PAF archives from any language that has a C FFI. Prebuilt Windows x64 binaries are in `bin/`.
 
-Matching is performed on 4 KB aligned blocks using FNV-1a 64-bit hashing with an open-addressing hash table.
+Integrations that would make PAF useful as a platform:
+
+- **Windows Shell Extension** — browse PAF contents in Explorer, launch files directly
+- **AV Plugin** — index-level hash scan before data is touched
+- **Deployment Agent** — apply delta updates with `paf_patch_apply_atomic`
+- **WASM Viewer** — already in `wasm/`, runs in browser
 
 ## Delta Updates
 
-Every index entry embeds a SHA-256 hash, enabling **O(N) delta detection without re-reading any file data**.  
-Suitable for game asset update delivery and directory synchronisation (rsync equivalent).
+Every index entry embeds a SHA-256 hash, enabling O(N) delta detection without re-reading any file data.
 
-### Workflow A — Directory Diff Copy
+### Workflow A — Directory Diff
 
 ```
-old dir ── paf_create_index_only ──▶ old.pafi  (MB-range, no data)
+old dir ── paf_create_index_only ──▶ old.pafi
 new dir ── paf_create_index_only ──▶ new.pafi
                                       │
                                       ▼
@@ -108,10 +75,9 @@ new dir ── paf_create_index_only ──▶ new.pafi
                  │  ADDED / UPDATED / DELETED entry list
                  ▼
    paf_patch_apply_from_dir(new_dir, delta, dst_dir)
-   → copies changed files only, removes deleted files
 ```
 
-### Workflow B — Binary Patch PAF (distribution)
+### Workflow B — Binary Patch PAF
 
 ```
 old dir ────────────────────────────────────────────┐
@@ -136,139 +102,72 @@ new dir ── paf_create_patch ──▶ patch.paf           │
 ### Code Examples
 
 ```c
-// ── Workflow A: directory diff copy ─────────────────────────────────────
-paf_create_index_only("old.pafi", (const char*[]){"/game/v1"}, 1, NULL);
-paf_create_index_only("new.pafi", (const char*[]){"/game/v2"}, 1, NULL);
+// Workflow A: directory diff copy
+paf_create_index_only("old.pafi", (const char*[]){"/app/v1"}, 1, NULL);
+paf_create_index_only("new.pafi", (const char*[]){"/app/v2"}, 1, NULL);
 
 paf_delta_t delta;
 paf_delta_calculate("old.pafi", "new.pafi", &delta);
 printf("%u change(s)\n", delta.count);
 
-paf_patch_apply_from_dir("/game/v2", &delta, "/game/installed", NULL, NULL);
+paf_patch_apply_from_dir("/app/v2", &delta, "/app/installed", NULL, NULL);
 paf_delta_free(&delta);
 
-// ── Workflow B: binary patch PAF ────────────────────────────────────────
-// Server side: generate compact patch archive
-paf_create_patch("/game/v1", "/game/v2", "patch_v1_v2.paf", NULL, NULL);
-
-// Client side: apply with SHA-256 verification + atomic rename
-paf_patch_apply_atomic("patch_v1_v2.paf", "/game/installed", NULL, NULL);
+// Workflow B: binary patch PAF
+paf_create_patch("/app/v1", "/app/v2", "patch_v1_v2.paf", NULL, NULL);
+paf_patch_apply_atomic("patch_v1_v2.paf", "/app/installed", NULL, NULL);
 ```
 
-Call `paf_delta_optimize_io` to sort delta entries by offset, maximising sequential I/O throughput.
-
-## Prebuilt Binaries
-
-Pre-compiled Windows x64 binaries (CUDA 13.2 + DirectStorage 1.2.2) are included for users who cannot build from source:
+## Archive Format
 
 ```
-bin/
-  libpaf.dll          Full GPU build (CUDA + DirectStorage + Vulkan)
-  dstorage.dll        DirectStorage 1.2.2 runtime — must be next to libpaf.dll
-  dstoragecore.dll    DirectStorage 1.2.2 core
-  bench_paf.exe       Standalone benchmark executable
-
-lib/
-  libpaf.lib          Import library for linking against libpaf.dll
+[Header 32B] [Data Block] [Index Block N×128B] [Path Buffer]
 ```
 
-To use the prebuilt DLL, copy `bin/libpaf.dll`, `bin/dstorage.dll`, and `bin/dstoragecore.dll` next to your application.  
-Link against `lib/libpaf.lib` and include headers from `libpaf/include/`.
+| Section | Size | Description |
+|:---|:---|:---|
+| Header | 32 B | Magic `PAF1`, version, flags, file count, index/path offsets |
+| Data Block | Variable | Raw uncompressed file data (absent when `PAF_FLAG_INDEX_ONLY`) |
+| Index Block | N × 128 B | Per-file metadata including SHA-256 |
+| Path Buffer | Variable | UTF-8 file paths |
 
-## Directory Structure
+### Index Entry (128 bytes)
+
+| Offset | Size | Field | Description |
+|:---|:---|:---|:---|
+| 0 | 8 B | `path_buffer_offset` | Byte offset within Path Buffer |
+| 8 | 4 B | `path_length` | Byte length of UTF-8 path |
+| 12 | 4 B | `flags` | `PAF_ENTRY_*` bitmask |
+| 16 | 8 B | `data_offset` | Byte offset within Data Block |
+| 24 | 8 B | `data_size` | Size in bytes |
+| 32 | 32 B | `hash` | SHA-256 of file contents |
+| 64 | 32 B | reserved | Zero-filled; reserved for SHA-512 / BLAKE3 |
+| 96 | 32 B | reserved | Zero-filled |
+
+### Header Flags
+
+| Flag | Value | Meaning |
+|:---|:---|:---|
+| `PAF_FLAG_INDEX_ONLY` | `0x02` | Data Block absent — hashes only |
+
+### Per-Entry Flags
+
+| Flag | Value | Meaning |
+|:---|:---|:---|
+| `PAF_ENTRY_DELETED` | `0x04` | File deleted; `data_size = 0` |
+| `PAF_ENTRY_BINARY_DELTA` | `0x08` | Data block is a PAFD binary delta |
+
+### PAFD Binary Delta Format
 
 ```
-bin/                    Prebuilt Windows x64 binaries (DLLs + benchmark exe)
-lib/                    Import library (libpaf.lib)
-libpaf/
-  include/              Public C headers
-    paf.h               Format definitions (paf_header_t, paf_index_entry_t, flags)
-    libpaf.h            Primary API (create / extract / patch)
-    paf_delta.h         Delta calculation and patch application
-    paf_extractor.h     Random-access extraction + GPU batch extraction
-    paf_gpu_loader.h    Runtime GPU detection (CUDA / Vulkan / DirectStorage)
-    paf_gpu.h           GPU direct load (DirectStorage / D3D12)
-    paf_vulkan.h        Vulkan compute pipeline API
-  src/                  Core library (C)
-    paf_sha256.comp     GLSL SHA-256 compute shader → paf_sha256.spv
-    paf_vulkan.c        Vulkan compute pipeline (no vulkan.h dependency)
-    paf_binary_delta.c  rsync-style block delta engine (PAFD format)
-    win/                Windows-only: CUDA kernel, DirectStorage, D3D12 direct load
-test/                   Test suite (test_paf.c)
-wasm/                   Emscripten bindings
-.github/workflows/      CI: Windows DLL, Linux .so, Android ARM64
+[magic "PAFD" 4B] [instr_count 4B] [old_file_size 8B]
+N × { [type 1B] [offset 8B] [size 4B] [data if LITERAL] }
 ```
 
-## Build
-
-### SDK Requirements (Windows full-GPU build only)
-
-#### CUDA Toolkit 13.2
-Required for NVIDIA GPU SHA-256 acceleration (`paf_cuda_kernels.cu`).
-
-**Install:**
-1. Download from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads) — select **Windows → x86_64 → Local Installer**.
-2. Install to the default path `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2`.
-3. Verify: `nvcc --version` should report `release 13.2`.
-
-> CPU-only and DirectStorage builds do **not** require CUDA.
-
-#### DirectStorage SDK 1.2.2 (SDK version 202)
-Required for NVMe→memory batch I/O (`paf_io_directstorage.cpp`).
-
-**`dstorage.dll` is NOT included in Windows** — it must be installed separately and placed next to `libpaf.dll` (or on the system PATH).
-
-**To install the runtime DLL:**
-
-Option A — NuGet (recommended):
-```powershell
-# In your project directory or a staging folder:
-nuget install Microsoft.Direct3D.DirectStorage -Version 1.2.2
-# Copy the DLL to your output directory:
-copy Microsoft.Direct3D.DirectStorage.1.2.2\native\bin\x64\dstorage.dll .
-```
-> If `nuget` is not on PATH, download the NuGet CLI from [nuget.org/downloads](https://www.nuget.org/downloads).
-
-Option B — GitHub release:
-1. Download `DirectStorage_1.2.2.zip` from [github.com/microsoft/DirectStorage/releases](https://github.com/microsoft/DirectStorage/releases).
-2. Extract and copy `native/bin/x64/dstorage.dll` next to `libpaf.dll`.
-
-**Development headers** (`dstorage.h`, `dstorageerr.h`) are already in `libpaf/src/win/` — no extra steps needed to build.
-
-If you want to update the SDK headers to a newer version:
-1. Extract the zip above.
-2. Copy `native/include/dstorage.h` and `native/include/dstorageerr.h` into `libpaf/src/win/`.
-3. `#define DSTORAGE_SDK_VERSION` in `dstorage.h` must be ≥ 202 (1.2.x).
-
-> `IDStorageQueue1::EnqueueSetEvent` (used for zero-CPU-spin batch completion) requires SDK ≥ 1.1 (version 201). Earlier versions fall back to a `Sleep(0)` yield loop automatically.
-
-#### Optional: Vulkan SDK (glslangValidator)
-Only needed to recompile `paf_sha256.comp` → `paf_sha256.spv`.  
-Download from [vulkan.lunarg.com/sdk/home](https://vulkan.lunarg.com/sdk/home). A pre-compiled `paf_sha256.spv` is included in the repository.
-
----
-
-### Linux / CI (CPU only)
-```sh
-gcc -O2 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -lpthread -o libpaf.so
-```
-`-lpthread` is required for parallel file writes (`phase3_write_parallel`). Android/bionic includes pthreads in libc — no extra flag needed there.
-
-### Windows — CPU only (CI-compatible)
-```bat
-cl /O2 /LD /Fe:libpaf.dll "-DLIBPAF_EXPORTS" "-DPAF_CI_BUILD" /Ilibpaf/include /Ilibpaf/src/win libpaf/src/*.c
-```
-
-### Windows — full GPU (CUDA 13.2 + MSVC + optional glslangValidator)
-```powershell
-.\build_paf_gpu.ps1
-```
-Compiles `paf_sha256.comp` → `paf_sha256.spv` (if `glslangValidator` is on PATH), builds `paf_cuda_kernels.cu` via nvcc, `paf_io_directstorage.cpp` + `paf_io_d3d12_direct.cpp` via cl, then links everything into `libpaf.dll` with `d3d12.lib`.
-
-### Android ARM64
-```powershell
-.\build_multi_platform.ps1
-```
+| type | Meaning |
+|:---|:---|
+| `0` COPY | Copy `size` bytes from `offset` in the old file |
+| `1` LITERAL | Emit the following `size` bytes verbatim |
 
 ## Public API
 
@@ -278,8 +177,71 @@ Compiles `paf_sha256.comp` → `paf_sha256.spv` (if `glslangValidator` is on PAT
 | `libpaf/include/paf_delta.h` | `paf_delta_calculate`, `paf_delta_free`, `paf_delta_optimize_io`, `paf_patch_apply`, `paf_patch_apply_from_dir`, `paf_patch_apply_atomic` |
 | `libpaf/include/paf_extractor.h` | `paf_extractor_open`, `paf_extractor_close`, `paf_extractor_get_file`, `paf_extractor_gpu_run` |
 | `libpaf/include/paf_gpu_loader.h` | `paf_cuda_is_available`, `paf_vulkan_is_available`, `paf_dstorage_is_available` |
-| `libpaf/include/paf_gpu.h` | `paf_gpu_direct_load`, `paf_gpu_direct_load_d3d12`, `paf_gpu_search_files` |
-| `libpaf/include/paf_vulkan.h` | `paf_vulkan_init`, `paf_vulkan_hash_flat`, `paf_vulkan_cleanup` |
+
+## High-Performance Backend (optional)
+
+For large-scale use (tens of thousands of files), `libpaf` supports GPU-accelerated SHA-256 and NVMe direct I/O. All detection is at runtime — no compile-time flags required.
+
+**GPU priority order:**
+```
+CUDA (paf_cuda.dll)  →  Vulkan (paf_sha256.spv)  →  CPU SHA-256
+```
+
+**DirectStorage** (Windows): NVMe→host and NVMe→GPU DMA transfers with no CPU involvement.
+
+These backends accelerate archive creation and integrity verification; they are not required for reading or integration.
+
+## Prebuilt Binaries
+
+```
+bin/
+  libpaf.dll          Windows x64, full GPU build (CUDA + DirectStorage + Vulkan)
+  dstorage.dll        DirectStorage 1.2.2 runtime
+  dstoragecore.dll    DirectStorage 1.2.2 core
+  bench_paf.exe       Benchmark
+
+lib/
+  libpaf.lib          Import library
+```
+
+Link against `lib/libpaf.lib`, include headers from `libpaf/include/`, and place the DLLs next to your application.
+
+## Build
+
+### Linux / CI (CPU only)
+```sh
+gcc -O2 -shared -fPIC -Ilibpaf/include libpaf/src/*.c -lpthread -o libpaf.so
+```
+
+### Windows — CPU only
+```bat
+cl /O2 /LD /Fe:libpaf.dll "-DLIBPAF_EXPORTS" "-DPAF_CI_BUILD" /Ilibpaf/include /Ilibpaf/src/win libpaf/src/*.c
+```
+
+### Windows — full GPU (CUDA 13.2 + MSVC)
+```powershell
+.\build_paf_gpu.ps1
+```
+
+### Android ARM64
+```powershell
+.\build_multi_platform.ps1
+```
+
+## Directory Structure
+
+```
+bin/                    Prebuilt Windows x64 binaries
+lib/                    Import library (libpaf.lib)
+libpaf/
+  include/              Public C headers
+  src/                  Core library (C)
+    paf_sha256.comp     GLSL SHA-256 compute shader
+    win/                Windows-only: CUDA, DirectStorage, D3D12
+test/                   Test suite
+wasm/                   Emscripten bindings (browser viewer)
+.github/workflows/      CI: Windows DLL, Linux .so, Android ARM64
+```
 
 ## Deployment
 
