@@ -243,6 +243,46 @@ wasm/                   Emscripten bindings (browser viewer)
 .github/workflows/      CI: Windows DLL, Linux .so, Android ARM64
 ```
 
+## Windows Shell Extension
+
+`shell/paf_shell.dll` integrates PAF into Windows Explorer:
+
+| Feature | Detail |
+|:---|:---|
+| Right-click menu | **Extract Here** / **Extract to [folder]...** |
+| Preview pane | File list with path, size, SHA-256 (hover for full hash) |
+| Double-click | Opens `paf_viewer.exe` — ListView with integrity verification |
+
+### Build
+
+From a Visual Studio Developer Command Prompt, run:
+
+```bat
+shell\build.bat
+```
+
+Produces `bin\paf_shell.dll` and `bin\paf_viewer.exe`.
+
+### Install / Uninstall
+
+```bat
+REM Install (requires Administrator)
+shell\install.bat
+
+REM Uninstall
+shell\uninstall.bat
+```
+
+`install.bat` copies the DLLs to `System32` and calls `regsvr32`, which runs
+`DllRegisterServer` to set up the `.paf` file association and shell extension approval.
+
+### GUIDs
+
+| Component | CLSID |
+|:---|:---|
+| Context Menu Handler | `{7F3A8B2C-4D5E-4F6A-8B7C-9D0E1F2A3B4C}` |
+| Preview Handler | `{8A4B9C3D-5E6F-4A7B-9C8D-0E1F2A3B4C5D}` |
+
 ## Deployment
 
 Pushing a tag (`v*`) triggers GitHub Actions to build Windows DLL, Linux .so, and Android ARM64 `.so`, then publishes them to the [Releases](../../releases) page.
