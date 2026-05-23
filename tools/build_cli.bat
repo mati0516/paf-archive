@@ -18,7 +18,7 @@ echo Building paf CLI -^> bin\paf.exe
 
 cl /O2 /W3 /nologo ^
     /I"libpaf\include" ^
-    "tools\paf_cli.c" ^
+    "tools\paf_cli.c" "libpaf\src\sha256.c" ^
     "lib\libpaf.lib" ^
     /Fe:"bin\paf.exe"
 
