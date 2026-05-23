@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Target .NET 6 LTS; also works with .NET 7/8/9 -->
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Optimize>true</Optimize>
+
+    <!-- Assembly metadata -->
+    <AssemblyName>PafArchive</AssemblyName>
+    <RootNamespace>PafArchive</RootNamespace>
+    <Version>1.0.0</Version>
+    <Description>P/Invoke bindings for libpaf — PAF archive format</Description>
+    <Authors>paf-archive contributors</Authors>
+
+    <!-- Output as library so both Paf.cs and Example.cs can coexist;
+         set StartupObject to choose the entry point. -->
+    <OutputType>Exe</OutputType>
+    <StartupObject>PafArchive.Example</StartupObject>
+  </PropertyGroup>
+
+</Project>
