@@ -237,3 +237,4 @@ test/*
 
 # AI Agent configuration
 .clineruleslocal_build/
+bin/paf
